@@ -1,0 +1,14 @@
+service: comsca-backend
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: ap-southeast-1
+
+functions:
+  api:
+    handler: src/handler.handler
+    events:
+      - httpApi:
+          path: /
+          method: GET
