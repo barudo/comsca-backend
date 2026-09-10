@@ -6,10 +6,15 @@
     "scripts": {
         "start": "node src/server.js",
         "dev": "nodemon src/server.js",
-        "test": "node --test"
+        "test": "node --test",
+        "migrate:latest": "knex migrate:latest",
+        "migrate:rollback": "knex migrate:rollback"
     },
     "dependencies": {
+        "dotenv": "^17.4.2",
         "express": "^5.1.0",
+        "knex": "^3.1.0",
+        "pg": "^8.16.3",
         "serverless-http": "^3.2.0"
     },
     "devDependencies": {
