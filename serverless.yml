@@ -4,11 +4,22 @@ provider:
   name: aws
   runtime: nodejs20.x
   region: ap-southeast-1
+  environment:
+    APP_STAGE: ${sls:stage}
+    DATABASE_URL: ${env:DATABASE_URL}
+    SUPABASE_URL: ${env:SUPABASE_URL, ''}
+    SUPABASE_PUBLISHABLE_KEY: ${env:SUPABASE_PUBLISHABLE_KEY, ''}
+    SUPABASE_SMS_HOOK_SECRET: ${env:SUPABASE_SMS_HOOK_SECRET, ''}
+  timeout: 20
+
+package:
+  patterns:
+    - '!.env*'
+    - '!test/**'
+    - '!scripts/**'
 
 functions:
   api:
     handler: src/handler.handler
     events:
-      - httpApi:
-          path: /
-          method: GET
+      - httpApi: '*'

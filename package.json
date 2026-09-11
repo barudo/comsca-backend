@@ -8,14 +8,18 @@
         "dev": "nodemon src/server.js",
         "test": "node --test",
         "migrate:latest": "knex migrate:latest",
+        "migrate:production": "node scripts/production.js migrate",
+        "deploy:production": "node scripts/production.js deploy",
         "migrate:rollback": "knex migrate:rollback"
     },
     "dependencies": {
+        "bcryptjs": "^3.0.3",
         "dotenv": "^17.4.2",
         "express": "^5.1.0",
         "knex": "^3.1.0",
         "pg": "^8.16.3",
-        "serverless-http": "^3.2.0"
+        "serverless-http": "^3.2.0",
+        "standardwebhooks": "^1.1.1"
     },
     "devDependencies": {
         "nodemon": "^3.1.10"

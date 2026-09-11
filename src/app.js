@@ -3,10 +3,16 @@ const db = require("./db");
 const loadRoutes = require("./api");
 const groupSlugMiddleware = require("./middleware/group-slug");
 
-function createApp(database = db) {
+function createApp(database = db, services = {}) {
   const app = express();
+  app.locals.database = database;
+  app.locals.services = services;
 
-  app.use(express.json());
+  // Verify Supabase signatures against the original bytes, before JSON parsing.
+  app.use("/api/v1/hooks", express.raw({ type: "application/json", limit: "32kb" }), require("./api/v1/hooks"));
+  app.use(express.json({ limit: "32kb" }));
+  // A new group does not exist yet, so registration cannot require its header.
+  app.use("/api/v1/user", require("./api/v1/user"));
   app.use(groupSlugMiddleware(database));
 
   app.get("/", (_request, response) => {
@@ -19,6 +25,9 @@ function createApp(database = db) {
   loadRoutes(app, `${__dirname}/api`, "/api");
 
   app.use((error, _request, response, _next) => {
+    if (error.type === "entity.parse.failed") {
+      return response.status(400).json({ success: false, error: "Invalid JSON body" });
+    }
     if (error.code === "ECONNREFUSED") {
       return response.status(503).json({
         success: false,

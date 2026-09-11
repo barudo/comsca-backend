@@ -67,23 +67,10 @@ test("POST /api/v1/auth/login is loaded from the auth route file", async () => {
     headers: { "x-group-slug": "comsca" },
   });
 
-  assert.equal(result.status, 501);
+  assert.equal(result.status, 400);
   assert.deepEqual(result.body, {
     success: false,
-    error: "Login is not implemented",
-  });
-});
-
-test("POST /api/v1/login is loaded from the login route file", async () => {
-  const result = await request(createTestApp(), "/api/v1/login", {
-    method: "POST",
-    headers: { "x-group-slug": "comsca" },
-  });
-
-  assert.equal(result.status, 501);
-  assert.deepEqual(result.body, {
-    success: false,
-    error: "Login is not implemented",
+    error: "A username and password (maximum 72 bytes) are required",
   });
 });
 
