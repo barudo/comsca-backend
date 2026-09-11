@@ -7,6 +7,7 @@ function createApp(database = db, services = {}) {
   const app = express();
   app.locals.database = database;
   app.locals.services = services;
+  app.use(require("./middleware/cors"));
 
   // Verify Supabase signatures against the original bytes, before JSON parsing.
   app.use("/api/v1/hooks", express.raw({ type: "application/json", limit: "32kb" }), require("./api/v1/hooks"));
