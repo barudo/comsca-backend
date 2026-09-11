@@ -4,6 +4,7 @@
 exports.up = async function up(knex) {
   await knex.schema.createTable("groups", (table) => {
     table.bigIncrements("id").primary();
+    table.string("name", 255).notNullable();
     table.string("slug", 255).notNullable();
     table.unique(["slug"], "groups_slug_unique");
     table
