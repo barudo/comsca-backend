@@ -191,7 +191,7 @@ Slugs are trimmed and lowercased using the registration rules.
 Both availability results return HTTP 200:
 
 ```json
-{"success":false,"message":"Group slug is already in use"}
+{"success":false,"message":"Group slug is already in use","group":{"id":1,"name":"COMSCA"}}
 ```
 
 ```json

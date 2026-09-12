@@ -21,7 +21,7 @@ function createTestApp() {
     assert.equal(table, "groups");
     return {
       where: ({ slug }) => ({
-        first: async () => (slug === "comsca" ? { id: 1, slug } : undefined),
+        first: async () => (slug === "comsca" ? { id: 1, name: "COMSCA", slug } : undefined),
       }),
     };
   });
@@ -31,7 +31,11 @@ test("slug availability is public and normalizes the query slug", async () => {
   for (const prefix of ["/groups", "/api/v1/groups"]) {
     const taken = await request(createTestApp(), `${prefix}/validate-slug?slug=%20COMSCA%20`);
     assert.equal(taken.status, 200);
-    assert.deepEqual(taken.body, { success: false, message: "Group slug is already in use" });
+    assert.deepEqual(taken.body, {
+      success: false,
+      message: "Group slug is already in use",
+      group: { id: 1, name: "COMSCA" },
+    });
     const available = await request(createTestApp(), `${prefix}/validate-slug?slug=new-group`);
     assert.equal(available.status, 200);
     assert.deepEqual(available.body, { success: true, message: "Group slug is available" });
