@@ -15,6 +15,7 @@ function createApp(database = db, services = {}) {
   // A new group does not exist yet, so registration cannot require its header.
   app.use("/api/v1/user", require("./api/v1/user"));
   app.use(["/groups", "/api/v1/groups"], require("./api/v1/groups"));
+  app.use("/api/v1/auth", require("./routes/supabase-auth"));
   app.use(groupSlugMiddleware(database));
 
   app.get("/", (_request, response) => {

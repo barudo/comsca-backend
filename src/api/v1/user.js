@@ -1,5 +1,6 @@
 const express = require("express");
 const { signUp, verifyOtp } = require("../../services/supabase-auth");
+const authProfile = require("../../services/auth-profile");
 const router = express.Router();
 
 router.post("/register", async (request, response, next) => {
@@ -78,19 +79,7 @@ router.post("/verify", async (request, response, next) => {
   try {
     const verified = await (request.app.locals.services.verifyOtp || verifyOtp)({ phone, otp });
     // Resolve membership using the verified identity, never a caller-supplied ID or slug.
-    const db = request.app.locals.database;
-    const user = await db("users").where({ auth_user_id: verified.user.id })
-      .first("id", "auth_user_id", "group_id", "first_name", "family_name", "phone");
-    if (!user) return response.status(409).json({ success: false, error: "Verified account has no linked application profile" });
-    const group = await db("groups").where({ id: user.group_id }).first("id", "name", "slug");
-    if (!group) return response.status(409).json({ success: false, error: "Verified account has no linked group" });
-    return response.json({ success: true, user, group, session: {
-      access_token: verified.access_token,
-      refresh_token: verified.refresh_token,
-      token_type: verified.token_type,
-      expires_in: verified.expires_in,
-      expires_at: verified.expires_at,
-    } });
+    return response.json(await authProfile(request.app.locals.database, verified));
   } catch (error) {
     if (error.status) return response.status(error.status).json({ success: false, error: error.message });
     next(error);

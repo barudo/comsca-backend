@@ -139,6 +139,50 @@ a message. Keep phone confirmation enabled: users verify their OTP using the
 endpoint below, which calls Supabase Auth with `type: "sms"`. The legacy bcrypt
 login endpoint remains separate; new accounts authenticate through Supabase Auth.
 
+### Supabase login and sessions
+
+These JSON endpoints require no `x-group-slug` header and return
+`Cache-Control: no-store`. Phone numbers use the same Philippine mobile number
+normalization as registration (`09171234567` becomes `+639171234567`).
+
+| POST endpoint | JSON body / header |
+| --- | --- |
+| `/api/v1/auth/login/password` | `{"phone":"09171234567","password":"your-password"}` |
+| `/api/v1/auth/login/otp/request` | `{"phone":"09171234567"}` |
+| `/api/v1/auth/login/otp/verify` | `{"phone":"09171234567","otp":"012345"}` |
+| `/api/v1/auth/refresh` | `{"refresh_token":"your-refresh-token"}` |
+| `/api/v1/auth/logout` | Header: `Authorization: Bearer <access_token>`; no body required |
+
+Password login, OTP verification, and refresh return HTTP 200 with
+`{"success":true,"user":{...},"group":{...},"session":{...}}`, using the same
+profile and session fields as `/api/v1/user/verify`. Membership is resolved from
+the Supabase-authenticated user ID. The frontend should replace its stored access
+and refresh tokens with the returned `session.access_token` and
+`session.refresh_token` after each successful refresh.
+
+OTP requests use `create_user: false` so login does not register new accounts.
+Successful requests return HTTP 200 with
+`{"success":true,"message":"If an account exists for this phone number, a verification code has been sent"}`.
+The existing Supabase SMS hook sends the code. Keep OTPs as strings to preserve
+leading zeros.
+
+Logout returns HTTP 200 with `{"success":true,"message":"Logged out successfully"}`.
+It uses Supabase's `local` scope to revoke the current session's refresh tokens.
+The frontend must clear its stored tokens after logout. Already issued access
+tokens remain valid until expiry, as described in
+[Supabase's sign-out documentation](https://supabase.com/docs/guides/auth/signout).
+
+Failures return `{"success":false,"error":"..."}`: HTTP 400 for invalid input or
+invalid/expired OTPs, 401 for invalid credentials or sessions, 403 for unconfirmed
+phones or blocked accounts, 409 for missing application profiles/groups, 429 for
+rate limits, 503 for missing Auth configuration, and 502 for upstream failures.
+Expired OTPs return `"Invalid or expired verification code"`.
+
+The legacy `/api/v1/auth/login` endpoint keeps its existing group-header and
+bcrypt behavior. These new routes do not add access-token validation to other
+application endpoints. They use the existing Supabase configuration and require
+no migration.
+
 ### Check group slug availability
 
 `GET /groups/validate-slug?slug=my-group` (also available at
