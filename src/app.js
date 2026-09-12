@@ -14,6 +14,7 @@ function createApp(database = db, services = {}) {
   app.use(express.json({ limit: "32kb" }));
   // A new group does not exist yet, so registration cannot require its header.
   app.use("/api/v1/user", require("./api/v1/user"));
+  app.use(["/groups", "/api/v1/groups"], require("./api/v1/groups"));
   app.use(groupSlugMiddleware(database));
 
   app.get("/", (_request, response) => {

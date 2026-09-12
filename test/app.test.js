@@ -27,6 +27,39 @@ function createTestApp() {
   });
 }
 
+test("slug availability is public and normalizes the query slug", async () => {
+  for (const prefix of ["/groups", "/api/v1/groups"]) {
+    const taken = await request(createTestApp(), `${prefix}/validate-slug?slug=%20COMSCA%20`);
+    assert.equal(taken.status, 200);
+    assert.deepEqual(taken.body, { success: false, message: "Group slug is already in use" });
+    const available = await request(createTestApp(), `${prefix}/validate-slug?slug=new-group`);
+    assert.equal(available.status, 200);
+    assert.deepEqual(available.body, { success: true, message: "Group slug is available" });
+  }
+});
+
+test("slug validation rejects invalid queries before querying the database", async () => {
+  let calls = 0;
+  const app = createApp(() => { calls++; throw new Error("Unexpected query"); });
+  for (const query of ["", "?slug=", "?slug=%20", "?slug=a&slug=b", "?slug=-bad",
+    "?slug=bad-", "?slug=bad_slug", "?slug=ADMIN", `?slug=${"a".repeat(64)}`]) {
+    const result = await request(app, `/groups/validate-slug${query}`);
+    assert.equal(result.status, 400);
+    assert.equal(result.body.success, false);
+    assert.equal(typeof result.body.message, "string");
+  }
+  assert.equal(calls, 0);
+});
+
+test("slug validation does not report availability when the database fails", async () => {
+  const app = createApp(() => ({ where: () => ({ first: async () => {
+    throw new Error("Private database details");
+  } }) }));
+  const result = await request(app, "/groups/validate-slug?slug=new-group");
+  assert.equal(result.status, 503);
+  assert.deepEqual(result.body, { success: false, message: "Slug validation service unavailable" });
+});
+
 test("GET / rejects requests without a group slug", async () => {
   const result = await request(createTestApp(), "/");
 

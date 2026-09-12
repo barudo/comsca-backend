@@ -3,6 +3,8 @@ const assert = require("node:assert/strict");
 const { signUp, verifyOtp } = require("../src/services/supabase-auth");
 
 test("Supabase OTP verification checks the confirmed identity and handles provider errors", async (t) => {
+  const logs = [];
+  t.mock.method(console, "error", (...args) => logs.push(args));
   const oldUrl = process.env.SUPABASE_URL;
   const oldKey = process.env.SUPABASE_PUBLISHABLE_KEY;
   process.env.SUPABASE_URL = "https://example.supabase.co";
@@ -17,12 +19,16 @@ test("Supabase OTP verification checks the confirmed identity and handles provid
   let result = session;
   let status = 200;
   let fail = false;
+  let invalidJson = false;
   t.mock.method(globalThis, "fetch", async (url, options) => {
     assert.equal(url, "https://example.supabase.co/auth/v1/verify");
     assert.equal(options.headers.apikey, "test-key");
     assert.deepEqual(JSON.parse(options.body), { phone: "+639171234567", token: "012345", type: "sms" });
     if (fail) throw new Error("Network failure");
-    return { ok: status === 200, status, json: async () => result };
+    return { ok: status === 200, status, json: async () => {
+      if (invalidJson) throw new SyntaxError("Private response content");
+      return result;
+    } };
   });
   const input = { phone: "+639171234567", otp: "012345" };
   assert.deepEqual(await verifyOtp(input), session);
@@ -33,10 +39,27 @@ test("Supabase OTP verification checks the confirmed identity and handles provid
   }
   for (const [http, code, expected] of [[403, "otp_expired", 400], [429, "over_request_rate_limit", 429], [500, "unexpected_failure", 502]]) {
     status = http; result = { code, msg: "Private provider detail" };
-    await assert.rejects(verifyOtp(input), { status: expected });
+    await assert.rejects(verifyOtp(input), {
+      status: expected,
+      message: expected === 400 ? "Invalid or expired verification code" :
+        expected === 429 ? "Too many verification attempts; try again later" : "Verification service unavailable",
+    });
   }
+  assert.deepEqual(logs.at(-1), ["Supabase OTP verification failed", {
+    reason: "provider_error", status: 500, code: "unexpected_failure",
+  }]);
+  result = null;
+  await assert.rejects(verifyOtp(input), { status: 502 });
+  assert.equal(logs.at(-1)[1].code, "unknown");
+  invalidJson = true;
+  await assert.rejects(verifyOtp(input), { status: 502 });
+  assert.equal(logs.at(-1)[1].reason, "invalid_json");
   fail = true;
   await assert.rejects(verifyOtp(input), { status: 502, message: "Verification service unavailable" });
+  assert.equal(logs.at(-1)[1].reason, "network_error");
+  for (const secret of [input.phone, input.otp, session.access_token, session.refresh_token, "Private"]) {
+    assert.equal(JSON.stringify(logs).includes(secret), false);
+  }
   delete process.env.SUPABASE_PUBLISHABLE_KEY;
   await assert.rejects(verifyOtp(input), { status: 503 });
 });

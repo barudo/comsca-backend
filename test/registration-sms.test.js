@@ -50,7 +50,9 @@ test("verification uses the OTP identity, validates input, and returns only its 
   error = Object.assign(new Error("Invalid or expired verification code"), { status: 400 });
   const denied = await post(body);
   assert.equal(denied.status, 400);
-  assert.equal((await denied.json()).session, undefined);
+  assert.deepEqual(await denied.json(), {
+    success: false, error: "Invalid or expired verification code",
+  });
   error = undefined;
   missing = true;
   const unlinked = await post(body);

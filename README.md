@@ -139,6 +139,25 @@ a message. Keep phone confirmation enabled: users verify their OTP using the
 endpoint below, which calls Supabase Auth with `type: "sms"`. The legacy bcrypt
 login endpoint remains separate; new accounts authenticate through Supabase Auth.
 
+### Check group slug availability
+
+`GET /groups/validate-slug?slug=my-group` (also available at
+`/api/v1/groups/validate-slug`) requires no `x-group-slug` header.
+Slugs are trimmed and lowercased using the registration rules.
+Both availability results return HTTP 200:
+
+```json
+{"success":false,"message":"Group slug is already in use"}
+```
+
+```json
+{"success":true,"message":"Group slug is available"}
+```
+
+Missing, invalid, or reserved slugs return HTTP 400; database failures return
+HTTP 503, both with `success: false` and a `message`. Results are not cached.
+Availability does not reserve the slug; registration still checks for conflicts.
+
 ### Verify the phone OTP
 
 `POST /api/v1/user/verify` accepts JSON without an `x-group-slug` header:

@@ -37,12 +37,21 @@ async function verifyOtp({ phone, otp }) {
       signal: AbortSignal.timeout(10000), redirect: "error",
     });
     result = await response.json();
-  } catch {
+  } catch (error) {
+    console.error("Supabase OTP verification failed", {
+      reason: response ? "invalid_json" : error.name === "TimeoutError" ? "timeout" : "network_error",
+      ...(response && { status: response.status }),
+    });
     throw Object.assign(new Error("Verification service unavailable"), { status: 502 });
   }
   if (!response.ok) {
-    const invalid = ["otp_expired", "otp_disabled", "validation_failed"].includes(result.code || result.error_code);
+    const code = result?.code || result?.error_code;
+    const invalid = ["otp_expired", "otp_disabled", "validation_failed"].includes(code);
     const status = response.status === 429 ? 429 : invalid ? 400 : 502;
+    if (status === 502) console.error("Supabase OTP verification failed", {
+      reason: "provider_error", status: response.status,
+      code: typeof code === "string" && /^[a-z_]{1,64}$/.test(code) ? code : "unknown",
+    });
     throw Object.assign(new Error(status === 429 ? "Too many verification attempts; try again later" :
       invalid ? "Invalid or expired verification code" : "Verification service unavailable"), { status });
   }
@@ -51,6 +60,7 @@ async function verifyOtp({ phone, otp }) {
     `+${String(result.user.phone).replace(/^\+/, "")}` !== phone ||
     typeof result.access_token !== "string" || !result.access_token ||
     typeof result.refresh_token !== "string" || !result.refresh_token) {
+    console.error("Supabase OTP verification failed", { reason: "invalid_session", status: response.status });
     throw Object.assign(new Error("Invalid verification response"), { status: 502 });
   }
   return result;
