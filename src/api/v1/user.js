@@ -5,14 +5,23 @@ const router = express.Router();
 router.post("/register", async (request, response, next) => {
   const body = request.body || {};
   const { firstname, lastname, groupName, password } = body;
-  if ([firstname, lastname, groupName].some((v) => typeof v !== "string" || !v.trim() || v.trim().length > 255) ||
-    typeof body.slug !== "string" || typeof body.phone !== "string" ||
-    typeof password !== "string" || password.length < 8 || Buffer.byteLength(password, "utf8") > 72) {
-    return response.status(400).json({ success: false, error: "Provide firstname, lastname, phone, groupName, slug and a password of at least 8 characters (maximum 72 bytes)" });
+  const errors = {};
+  for (const field of ["firstname", "lastname", "groupName"]) {
+    if (typeof body[field] !== "string" || !body[field].trim()) errors[field] = `${field} is required`;
+    else if (body[field].trim().length > 255) errors[field] = `${field} must be at most 255 characters`;
+  }
+  for (const field of ["phone", "slug"]) {
+    if (typeof body[field] !== "string" || !body[field].trim()) errors[field] = `${field} is required`;
+  }
+  if (typeof password !== "string" || password.length < 8) errors.password = "Password must contain at least 8 characters";
+  else if (Buffer.byteLength(password, "utf8") > 72) errors.password = "Password must be at most 72 UTF-8 bytes";
+  if (Object.keys(errors).length) {
+    return response.status(400).json({ success: false, error: Object.values(errors).join("; "), errors });
   }
   const slug = body.slug.trim().toLowerCase();
   let phone = body.phone.trim();
-  if (/^09\d{9}$/.test(phone)) phone = `+63${phone.slice(1)}`;
+  if (/^9\d{9}$/.test(phone)) phone = `+63${phone}`;
+  else if (/^09\d{9}$/.test(phone)) phone = `+63${phone.slice(1)}`;
   else if (/^639\d{9}$/.test(phone)) phone = `+${phone}`;
   if (!/^\+639\d{9}$/.test(phone) ||
     !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(slug) ||
@@ -58,7 +67,8 @@ router.post("/verify", async (request, response, next) => {
   let { phone, otp } = request.body || {};
   if (typeof phone === "string") {
     phone = phone.trim();
-    if (/^09\d{9}$/.test(phone)) phone = `+63${phone.slice(1)}`;
+    if (/^9\d{9}$/.test(phone)) phone = `+63${phone}`;
+    else if (/^09\d{9}$/.test(phone)) phone = `+63${phone.slice(1)}`;
     else if (/^639\d{9}$/.test(phone)) phone = `+${phone}`;
   }
   if (typeof phone !== "string" || !/^\+639\d{9}$/.test(phone) ||

@@ -39,7 +39,7 @@ test("verification uses the OTP identity, validates input, and returns only its 
     assert.equal((await post(body)).status, 400);
   }
   assert.equal(calls, 0);
-  const body = { phone: input.phone, otp: "012345", auth_user_id: "attacker-id", slug: "wrong-group" };
+  const body = { phone: "9171234567", otp: "012345", auth_user_id: "attacker-id", slug: "wrong-group" };
   const response = await post(body);
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("cache-control"), "no-store");
@@ -78,7 +78,7 @@ test("registration validates input and maps metadata without storing passwords",
     assert.equal((await post(body)).status, 400);
   }
   assert.equal(signup, undefined);
-  const response = await post(input);
+  const response = await post({ ...input, phone: "9171234567" });
   assert.equal(response.status, 201);
   assert.equal(response.headers.get("cache-control"), "no-store");
   assert.equal((await response.json()).verification_required, true);

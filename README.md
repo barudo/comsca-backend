@@ -202,3 +202,11 @@ budget. HTTP 2xx from the gateway is treated as acceptance and returns `{}` with
 200 to Supabase; non-2xx/network failures return a hook error. Delivery receipts
 and deduplication of retries are not implemented. No OTPs or passwords are logged.
 Tests stub Auth and the gateway; they do not create real accounts or send SMS.
+
+Browser requests are allowed from HTTPS `comsca.com` and its immediate subdomains,
+plus HTTP localhost development origins. Additional exact origins can be listed
+in `CORS_ALLOWED_ORIGINS`, separated by commas. CORS preflights are handled before
+application authentication and validation. Cookie credentials are not enabled.
+Registration and verification also accept the frontend's ten-digit `9…` mobile
+number and normalize it to `+639…`. Registration validation returns field-specific
+messages in `errors`, with a readable summary in `error`.
