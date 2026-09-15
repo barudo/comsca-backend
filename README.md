@@ -29,6 +29,75 @@ npm run migrate:rollback
 The initial migration creates groups, users, cycles, and cycle membership tables.
 Users and cycles belong to a group, while `cycle_members` links users to cycles.
 
+Migration `005_create_transactions.js` adds business transactions. Every transaction
+requires a `group_id`, a positive `amount` (18 digits, including 2 decimal places),
+and a `type` in uppercase snake case. Suggested types are `EQUITY`,
+`LOAN_DISBURSEMENT`, `LOAN_PAYMENT`, `ADD_PAYABLE`, `ADD_PENALTY`, `DISBURSEMENT`,
+and `OTHER_SALES`; additional types are supported without a migration. The amount
+is a magnitude; the type describes the operation, including non-cash operations.
+
+For group-wide transactions, leave `user_id` null; `cycle_id` is optional.
+For member transactions, supply both `cycle_id` and `user_id`. Foreign keys enforce
+that the cycle and user belong to the transaction's group and that the user is a
+member of that cycle. Referenced groups, cycles, users, and memberships cannot be
+deleted while transactions exist. Optional `description` and `occurred_at` record
+context and the business event time; `occurred_at` defaults to now. `created_at`
+and `updated_at` also default to now; writers must maintain `updated_at` on edits.
+Row level security is enabled with no public API policies, matching existing tables.
+
+Migration `006_create_accounts_and_transaction_entries.js` adds group-owned
+`accounts` (unique code per group, name, description, and type: `ASSET`,
+`LIABILITY`, `EQUITY`, `INCOME`, or `EXPENSE`) and `transaction_entries`.
+Each entry references a transaction and an account in the same group and has
+exactly one positive `debit` or `credit`, with the other zero. Both amounts use
+18 digits including 2 decimal places. Referenced accounts cannot be deleted.
+
+Save a transaction and its entries together inside a Knex `db.transaction(...)`.
+A deferred database constraint requires at least two entries with equal total
+debits and credits at commit. Entry inserts, updates, and deletes also trigger
+this check and update the parent transaction's `updated_at`. An entry's group
+and transaction cannot be reassigned. Existing transactions are not backfilled;
+they require balanced entries when next edited. Concurrent entry writes serialize
+through their parent transaction; callers must handle database transaction retries.
+
+For a `LOAN_PAYMENT` of 1,100 covering 1,000 principal and 100 interest, record:
+
+| Account | Debit | Credit |
+| --- | ---: | ---: |
+| Cash | 1,100 | 0 |
+| Loans Receivable | 0 | 1,000 |
+| Interest Income | 0 | 100 |
+
+If interest was previously recorded as a receivable, credit Interest Receivable
+instead of recognizing the income again. Derive account balances from entries:
+debits minus credits for assets and expenses, credits minus debits for liabilities,
+equity, and income. No mutable balance column or default accounts are created.
+Both new tables enable row level security without public API policies.
+
+Migration `007_add_cycle_financial_settings.js` stores financial terms on each
+cycle, so different cycles can use different terms:
+
+| Column | Meaning |
+| --- | --- |
+| `interest_rate` | Nonnegative percentage per period, with up to 6 decimal places; `2.5` means 2.5%, not 250%. |
+| `interest_period` | `DAILY`, `WEEKLY`, `MONTHLY`, or `YEARLY`. |
+| `interest_method` | `SIMPLE` for outstanding principal only; `COMPOUND` for outstanding principal plus unpaid interest. |
+| `cost_per_share` | Positive monetary price of one share, with 2 decimal places. |
+
+All four fields default to null, leaving existing cycles unconfigured. The three
+interest fields must be either all set or all null; zero interest is explicitly
+represented by a rate of `0` with a period and method. Share price can be configured
+independently. For example, `interest_rate: 2.5`, `interest_period: 'MONTHLY'`,
+`interest_method: 'COMPOUND'`, and `cost_per_share: 100.00` specify 2.5% monthly
+compound interest and a share price of 100 in the group's monetary unit.
+
+This migration stores settings only; it does not calculate interest, schedule
+accruals, or generate accounting entries. Lending and share-purchase code must
+require the relevant settings before use. Before implementing those operations,
+define payment allocation, partial-period calculations, and rounding, and preserve
+the terms applied to each loan or share purchase so later setting changes do not
+rewrite historical amounts. Writers must maintain the cycle's `updated_at`.
+
 ## AWS Lambda
 
 Configure the Lambda handler as `src/handler.handler` and expose it through API Gateway or a Lambda Function URL.
