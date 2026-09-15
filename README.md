@@ -115,9 +115,54 @@ Existing users and ordinary inserts default to `MEMBER`. Assign existing group
 owners explicitly after review; the migration does not infer ownership. New group
 registration assigns its creator `OWNER` in the database trigger, independently
 of client-supplied role metadata. Cycle membership remains separate.
-This migration stores and validates roles; endpoint authorization and role-management
-APIs are not implemented by it. Rolling it back removes all role assignments and
+The migration stores and validates roles. `POST /user` enforces owner/admin access;
+role-management APIs are not implemented. Rolling it back removes all role assignments and
 restores the previous registration behavior.
+
+### Add a group member
+
+`POST /user` (also available as `POST /api/v1/user`) creates a member profile in
+the group identified by `x-group-slug`. Requires migration 008 and a Supabase
+access token from the phone/password or OTP login flow. The legacy username login
+does not issue an access token.
+
+```http
+POST /user
+Authorization: Bearer <access_token>
+x-group-slug: your-group
+Content-Type: application/json
+
+{
+  "firstname": "Ana",
+  "lastname": "Cruz",
+  "username": "ana",
+  "phone": "09171234567",
+  "email": "ana@example.com",
+  "address": "Main Street"
+}
+```
+
+Only `firstname` and `lastname` are required. Names and username have a maximum
+length of 255, email 320, phone 32, and address 4,000 characters. Philippine mobile
+numbers normalize to `+639…`. Optional fields may be omitted or null.
+New users always receive `MEMBER`; an optional `role` must be `MEMBER`.
+Unsupported fields, including `group_id`, `auth_user_id`, and `password`, are rejected.
+
+The bearer token is verified with Supabase Auth. The caller's linked database user
+must belong to the selected group and currently have `OWNER` or `ADMIN`; token
+metadata does not grant permissions. The role check and insert run in one database
+transaction, locking the caller's row against concurrent role/group changes.
+
+Returns `201` with `{ "success": true, "user": { ... } }`, including the new user's
+ID, group, profile fields, role, and creation timestamp. Returns `400` for invalid
+input or a missing group header, `401` for missing/invalid authentication, `403`
+for insufficient group permissions, `404` for an unknown group, and `409` for a
+duplicate username within the group. Authentication provider errors return `429`,
+`502`, or `503` as appropriate.
+
+This creates an application profile only. It does not create a Supabase login,
+send an invitation or SMS, or add the member to a cycle. Login provisioning and
+cycle enrollment require separate flows.
 
 ## AWS Lambda
 

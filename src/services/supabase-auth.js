@@ -66,7 +66,7 @@ async function verifyOtp({ phone, otp }) {
   return result;
 }
 
-async function authRequest(path, body, accessToken) {
+async function authRequest(path, body, accessToken, method = "POST") {
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_PUBLISHABLE_KEY;
   if (!url || !key) throw Object.assign(new Error("Supabase Auth is not configured"), { status: 503 });
@@ -74,7 +74,7 @@ async function authRequest(path, body, accessToken) {
   let result;
   try {
     response = await fetch(`${url.replace(/\/$/, "")}/auth/v1/${path}`, {
-      method: "POST",
+      method,
       headers: { apikey: key, "Content-Type": "application/json",
         ...(accessToken && { Authorization: `Bearer ${accessToken}` }) },
       ...(body && { body: JSON.stringify(body) }),
@@ -96,7 +96,7 @@ async function authRequest(path, body, accessToken) {
       status = 403; message = "Verify your phone number before signing in";
     } else if (["refresh_token_not_found", "refresh_token_already_used", "session_not_found",
       "session_expired", "bad_jwt", "no_authorization"].includes(code) ||
-      (path.startsWith("logout") && [401, 403].includes(response.status))) {
+      ((path.startsWith("logout") || path === "user") && [401, 403].includes(response.status))) {
       status = 401; message = "Invalid or expired session; sign in again";
     } else if (code === "user_banned") {
       status = 403; message = "Account access is unavailable";
@@ -138,4 +138,12 @@ async function logout({ access_token }) {
   await authRequest("logout?scope=local", undefined, access_token);
 }
 
-module.exports = { signUp, verifyOtp, loginPassword, requestOtp, refreshSession, logout };
+async function getUser({ access_token }) {
+  const user = await authRequest("user", undefined, access_token, "GET");
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user?.id || "")) {
+    throw Object.assign(new Error("Invalid authentication response"), { status: 502 });
+  }
+  return user;
+}
+
+module.exports = { signUp, verifyOtp, loginPassword, requestOtp, refreshSession, logout, getUser };

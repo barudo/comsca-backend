@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const bcrypt = require("bcryptjs");
 const knex = require("knex");
 const path = require("node:path");
+const serverless = require("serverless-http");
 const { createApp } = require("../src/app");
 
 test("login and RLS isolate groups on a reused database connection", {
@@ -201,4 +202,28 @@ test("login and RLS isolate groups on a reused database connection", {
   } });
   assert.equal((await db("users").where({ auth_user_id: authId }).first()).group_id, profile.group_id);
   assert.equal((await db("users").where({ auth_user_id: authId }).first()).role, "OWNER");
+
+  await t.test("POST /user persists a member only in the caller's managed group", async () => {
+    const handler = serverless(createApp(db, { getUser: async () => ({ id: authId }) }));
+    const postMember = async (slug) => {
+      const result = await handler({ version: "2.0", rawPath: "/user", rawQueryString: "",
+        headers: { "content-type": "application/json", authorization: "Bearer verified-token", "x-group-slug": slug },
+        requestContext: { http: { method: "POST", sourceIp: "127.0.0.1" } },
+        body: JSON.stringify({ firstname: "New", lastname: "Member", username: "new-member" }),
+        isBase64Encoded: false }, {});
+      return { status: result.statusCode, body: JSON.parse(result.body) };
+    };
+    assert.equal((await postMember("alpha")).status, 403);
+    const created = await postMember(group.slug);
+    assert.equal(created.status, 201);
+    const member = await db("users").where({ id: created.body.user.id }).first();
+    assert.equal(member.group_id, group.id);
+    assert.equal(member.role, "MEMBER");
+    assert.equal(member.auth_user_id, null);
+    assert.equal(member.password, null);
+    assert.equal((await postMember(group.slug)).status, 409);
+    await db("users").where({ id: profile.id }).update({ role: "MEMBER" });
+    assert.equal((await postMember(group.slug)).status, 403);
+    await db("users").where({ id: profile.id }).update({ role: "OWNER" });
+  });
 });

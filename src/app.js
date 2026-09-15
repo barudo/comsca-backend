@@ -17,6 +17,7 @@ function createApp(database = db, services = {}) {
   app.use(["/groups", "/api/v1/groups"], require("./api/v1/groups"));
   app.use("/api/v1/auth", require("./routes/supabase-auth"));
   app.use(groupSlugMiddleware(database));
+  app.use(["/user", "/api/v1/user"], require("./routes/group-users"));
 
   app.get("/", (_request, response) => {
     response.json({
