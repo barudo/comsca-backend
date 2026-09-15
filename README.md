@@ -98,6 +98,27 @@ define payment allocation, partial-period calculations, and rounding, and preser
 the terms applied to each loan or share purchase so later setting changes do not
 rewrite historical amounts. Writers must maintain the cycle's `updated_at`.
 
+### Group roles
+
+Migration `008_add_user_group_roles.js` adds a required `users.role` scoped to
+the user's `group_id`. Allowed roles and intended permissions are:
+
+| Role | Intended permissions |
+| --- | --- |
+| `OWNER` | Full group access, assign admins, transfer ownership, manage settings. |
+| `ADMIN` | Manage users, cycles, cycle membership, and financial settings. |
+| `TREASURER` | Record financial operations, manage accounts, view financial reports. |
+| `MEMBER` | View their own shares, loans, payments, and balances; submit supported requests. |
+| `AUDITOR` | Read-only access to group transactions, accounts, and reports. |
+
+Existing users and ordinary inserts default to `MEMBER`. Assign existing group
+owners explicitly after review; the migration does not infer ownership. New group
+registration assigns its creator `OWNER` in the database trigger, independently
+of client-supplied role metadata. Cycle membership remains separate.
+This migration stores and validates roles; endpoint authorization and role-management
+APIs are not implemented by it. Rolling it back removes all role assignments and
+restores the previous registration behavior.
+
 ## AWS Lambda
 
 Configure the Lambda handler as `src/handler.handler` and expose it through API Gateway or a Lambda Function URL.

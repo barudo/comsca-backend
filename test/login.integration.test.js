@@ -89,7 +89,22 @@ test("login and RLS isolate groups on a reused database connection", {
   });
   // Rollback only the new migration, then prove it can be applied again.
   await db.migrate.down();
+  assert.equal(await db.schema.hasColumn("users", "role"), false);
   await db.migrate.latest();
+
+  await t.test("group roles default to member and only accept the five defined roles", async () => {
+    const user = await db("users").where({ group_id: groups[0].id }).first();
+    assert.equal(user.role, "MEMBER");
+    for (const role of ["OWNER", "ADMIN", "TREASURER", "MEMBER", "AUDITOR"]) {
+      await db("users").where({ id: user.id }).update({ role });
+      assert.equal((await db("users").where({ id: user.id }).first()).role, role);
+    }
+    for (const role of ["SUPERADMIN", "admin", ""]) {
+      await assert.rejects(db("users").where({ id: user.id }).update({ role }), { code: "23514" });
+    }
+    await assert.rejects(db("users").where({ id: user.id }).update({ role: null }), { code: "23502" });
+    await db("users").where({ id: user.id }).update({ role: "MEMBER" });
+  });
 
   await t.test("cycle financial settings validate terms without inventing defaults", async () => {
     const group_id = groups[0].id;
@@ -152,12 +167,13 @@ test("login and RLS isolate groups on a reused database connection", {
     assert.equal(rows.length, 2);
   });
 
-  const registration = { firstname: "Ana", lastname: "Cruz", groupName: "New Group", slug: "new-group" };
+  const registration = { firstname: "Ana", lastname: "Cruz", groupName: "New Group", slug: "new-group", role: "AUDITOR" };
   const authId = "11111111-1111-4111-8111-111111111111";
   await db("auth.users").insert({ id: authId, phone: "639171234567",
     raw_user_meta_data: { comsca_registration: registration } });
   const profile = await db("users").where({ auth_user_id: authId }).first();
   assert.equal(profile.first_name, "Ana");
+  assert.equal(profile.role, "OWNER");
   assert.equal(profile.family_name, "Cruz");
   assert.equal(profile.phone, "+639171234567");
   assert.equal(profile.password, null);
@@ -184,4 +200,5 @@ test("login and RLS isolate groups on a reused database connection", {
     comsca_registration: { ...registration, slug: "beta", group_id: groups[1].id },
   } });
   assert.equal((await db("users").where({ auth_user_id: authId }).first()).group_id, profile.group_id);
+  assert.equal((await db("users").where({ auth_user_id: authId }).first()).role, "OWNER");
 });
