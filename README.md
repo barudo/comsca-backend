@@ -119,6 +119,30 @@ The migration stores and validates roles. `POST /user` enforces owner/admin acce
 role-management APIs are not implemented. Rolling it back removes all role assignments and
 restores the previous registration behavior.
 
+### Current user
+
+`GET /users/me` (also `GET /api/v1/users/me`) returns the authenticated user's
+application profile in the group selected by `x-group-slug`. Available to all
+five group roles.
+
+```http
+GET /users/me
+Authorization: Bearer <access_token>
+x-group-slug: your-group
+```
+
+Returns `200` with `{ "success": true, "user": { ... }, "group": { ... } }`.
+The user includes `id`, `group_id`, `first_name`, `family_name`, `username`,
+`email`, `phone`, `address`, `role`, `created_at`, and `updated_at`. The group
+includes `id`, `name`, and `slug`. Passwords, Auth IDs, and session tokens are
+excluded, and responses use `Cache-Control: no-store`.
+
+The verified bearer token determines identity; query parameters cannot select
+another user. Roles are read from the database. Returns `400` for a missing group
+header, `401` for missing or invalid authentication, `404` for an unknown group,
+and `403` if the caller has no linked profile in the selected group. Provider
+failures return `429`, `502`, or `503` as appropriate.
+
 ### Add a group member
 
 `POST /user` (also available as `POST /api/v1/user`) creates a member profile in
