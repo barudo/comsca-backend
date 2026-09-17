@@ -119,6 +119,33 @@ The migration stores and validates roles. `POST /user` enforces owner/admin acce
 role-management APIs are not implemented. Rolling it back removes all role assignments and
 restores the previous registration behavior.
 
+### Group users
+
+`GET /groups/users` (also `GET /api/v1/groups/users`) lists users belonging to
+the group selected by `x-group-slug`. Requires a bearer access token and an
+`OWNER` or `ADMIN` database role in that group, as for user creation.
+
+```http
+GET /groups/users
+Authorization: Bearer <access_token>
+x-group-slug: your-group
+```
+
+Returns `{ "success": true, "current_cycle_id": "7", "users": [...] }`.
+Each user includes `id`, `group_id`, `first_name`, `family_name`, `username`,
+`email`, `phone`, `address`, `role`, `created_at`, `updated_at`, and the boolean
+`is_current_cycle_member`. Passwords and Auth IDs are excluded. Users without
+login access are included. Results include all group users, ordered by family
+name, first name, and ID.
+
+Until an explicit cycle lifecycle is introduced, **current cycle means the most
+recently created cycle in that group**, ordered by `created_at DESC, id DESC`.
+Membership in older cycles does not count. With no cycle, `current_cycle_id` is
+null and every membership flag is false. Query parameters cannot override the
+group or cycle selection. Returns `400` for a missing group header, `401` for
+missing/invalid authentication, `404` for an unknown group, and `403` for callers
+without the required role in that group. Responses use `Cache-Control: no-store`.
+
 ### Current user
 
 `GET /users/me` (also `GET /api/v1/users/me`) returns the authenticated user's
@@ -145,13 +172,13 @@ failures return `429`, `502`, or `503` as appropriate.
 
 ### Add a group member
 
-`POST /user` (also available as `POST /api/v1/user`) creates a member profile in
+`POST /groups/users` (also `/api/v1/groups/users`, `/user`, and `/api/v1/user`) creates a member profile in
 the group identified by `x-group-slug`. Requires migration 008 and a Supabase
 access token from the phone/password or OTP login flow. The legacy username login
 does not issue an access token.
 
 ```http
-POST /user
+POST /groups/users
 Authorization: Bearer <access_token>
 x-group-slug: your-group
 Content-Type: application/json
@@ -185,8 +212,55 @@ duplicate username within the group. Authentication provider errors return `429`
 `502`, or `503` as appropriate.
 
 This creates an application profile only. It does not create a Supabase login,
-send an invitation or SMS, or add the member to a cycle. Login provisioning and
-cycle enrollment require separate flows.
+send an invitation or SMS, or add the member to a cycle. Use the account endpoint
+below for login provisioning; cycle enrollment remains separate.
+
+### Enable a member's login
+
+`POST /groups/users/:id/account` (also `/api/v1/groups/users/:id/account`) provisions
+a phone/password login for an existing member. Requires `OWNER` or `ADMIN` in
+the `x-group-slug` group; the target must belong to that same group.
+
+```http
+POST /groups/users/20/account
+Authorization: Bearer <admin_or_owner_access_token>
+x-group-slug: your-group
+Content-Type: application/json
+
+{ "password": "initial-password" }
+```
+
+The password must contain at least 8 characters and at most 72 UTF-8 bytes, and
+meet the project's Supabase password policy. Other body fields are rejected.
+The member must already have a saved `+639…` phone number. The endpoint uses
+Supabase's server-only [Admin createUser API](https://supabase.com/docs/reference/javascript/auth-admin-createuser)
+with `phone_confirm: true`: no OTP or invitation is sent. The administrator is
+responsible for confirming the member's phone. Login then uses the existing
+`POST /api/v1/auth/login/password` endpoint with that phone and password.
+
+Setup: apply migration `009_link_member_auth_accounts.js` and configure
+`SUPABASE_SERVICE_ROLE_KEY` in the backend environment (and `.env.production`
+for production deployment). This privileged key must never be supplied by the
+browser. `SUPABASE_URL` and `DATABASE_URL` must refer to the same Supabase project.
+
+The migration installs a deferred Auth trigger which reads server-controlled
+app metadata, rechecks the actor's group role, and links `users.auth_user_id` in
+the same database transaction that creates the Auth user. Missing, already-linked,
+or changed targets cause Auth creation to roll back. No password is stored in
+the application's `users` table, and the member's role stays unchanged. The
+existing registration trigger remains responsible only for new-group signups.
+Rollback removes the provisioning trigger without deleting existing accounts or links.
+
+Returns `201` with `{ "success": true, "user": { "id": "20", "group_id": "1",
+"phone": "+639171234567", "role": "MEMBER", "has_login": true,
+"phone_verified": true } }`. Passwords, Auth IDs, and session tokens are excluded.
+Returns `400` for invalid input/missing phone, `401` for invalid authentication,
+`403` for insufficient group permissions, `404` for a target outside the group or
+a missing target, and `409` for existing login access or a phone already in Auth.
+Existing Auth accounts are never adopted or reset. Missing migration/configuration
+returns `503`; provider errors return `429` or `502`.
+If a response is lost after Auth commits, retrying returns `409` because the link
+already exists; the original password remains in effect.
 
 ## AWS Lambda
 

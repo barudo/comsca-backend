@@ -22,6 +22,8 @@ test("login and RLS isolate groups on a reused database connection", {
     table.uuid("id").primary();
     table.string("phone");
     table.jsonb("raw_user_meta_data");
+    table.jsonb("raw_app_meta_data");
+    table.timestamp("phone_confirmed_at", { useTz: true });
   });
   await db.migrate.latest();
   const groups = await db("groups").insert([
@@ -88,7 +90,8 @@ test("login and RLS isolate groups on a reused database connection", {
     await trx.raw("SET LOCAL ROLE comsca_login");
     assert.deepEqual(await trx("users").select("id"), []);
   });
-  // Rollback only the new migration, then prove it can be applied again.
+  // Roll back provisioning and roles, then prove both can be applied again.
+  await db.migrate.down();
   await db.migrate.down();
   assert.equal(await db.schema.hasColumn("users", "role"), false);
   await db.migrate.latest();
@@ -202,6 +205,75 @@ test("login and RLS isolate groups on a reused database connection", {
   } });
   assert.equal((await db("users").where({ auth_user_id: authId }).first()).group_id, profile.group_id);
   assert.equal((await db("users").where({ auth_user_id: authId }).first()).role, "OWNER");
+
+  await t.test("member Auth linking is atomic, confirmed, group scoped, and ignores public metadata", async () => {
+    const [target] = await db("users").insert({ group_id: group.id, first_name: "Login", family_name: "Member", phone: "+639191234567" }).returning("id");
+    const member = { user_id: String(target.id), group_id: String(group.id), actor_id: String(profile.id) };
+    const provisionId = "33333333-3333-4333-8333-333333333333";
+    const row = { id: provisionId, phone: "639191234567", phone_confirmed_at: new Date(), raw_app_meta_data: { comsca_member: member } };
+    for (const invalid of [
+      { ...row, phone_confirmed_at: null },
+      { ...row, phone: "639181234567" },
+      { ...row, raw_app_meta_data: { comsca_member: { ...member, group_id: String(groups[0].id) } } },
+      { ...row, raw_app_meta_data: { comsca_member: { ...member, actor_id: String(target.id) } } },
+    ]) {
+      await assert.rejects(db("auth.users").insert(invalid), { code: "23514" });
+      assert.equal(await db("auth.users").where({ id: provisionId }).first(), undefined);
+      assert.equal((await db("users").where({ id: target.id }).first()).auth_user_id, null);
+    }
+    // Client-editable metadata must not link a member to a login identity.
+    await db("auth.users").insert({ id: provisionId, phone: row.phone, raw_user_meta_data: { comsca_member: member } });
+    assert.equal((await db("users").where({ id: target.id }).first()).auth_user_id, null);
+    await db("auth.users").where({ id: provisionId }).del();
+    // Match Auth's multi-statement create/confirm flow; linkage runs at commit.
+    await db.transaction(async trx => {
+      await trx("auth.users").insert({ id: provisionId, phone: row.phone });
+      await trx("auth.users").where({ id: provisionId }).update({ raw_app_meta_data: row.raw_app_meta_data, phone_confirmed_at: row.phone_confirmed_at });
+    });
+    assert.equal((await db("users").where({ id: target.id }).first()).auth_user_id, provisionId);
+    const anotherId = "44444444-4444-4444-8444-444444444444";
+    await assert.rejects(db("auth.users").insert({ ...row, id: anotherId }), { code: "23514" });
+    assert.equal(await db("auth.users").where({ id: anotherId }).first(), undefined);
+    // Remove this test's fixture so the later list checks retain their expected size.
+    await db("users").where({ id: target.id }).del();
+    await db("auth.users").where({ id: provisionId }).del();
+  });
+
+  await t.test("group user listing includes only current-cycle memberships within the group", async () => {
+    const handler = serverless(createApp(db, { getUser: async () => ({ id: authId }) }));
+    const list = async () => {
+      const response = await handler({ version: "2.0", rawPath: "/groups/users", rawQueryString: "",
+        headers: { authorization: "Bearer verified-token", "x-group-slug": group.slug },
+        requestContext: { http: { method: "GET", sourceIp: "127.0.0.1" } } }, {});
+      assert.equal(response.statusCode, 200);
+      return JSON.parse(response.body);
+    };
+    const noCycle = await list();
+    assert.equal(noCycle.current_cycle_id, null);
+    assert.equal(noCycle.users[0].is_current_cycle_member, false);
+    const [member] = await db("users").insert({ group_id: group.id, first_name: "Other", family_name: "Member" }).returning("id");
+    // Equal timestamps exercise the deterministic ID tie-breaker.
+    const cycles = await db("cycles").insert([
+      { group_id: group.id, created_at: "2026-09-01T00:00:00Z" },
+      { group_id: group.id, created_at: "2026-09-01T00:00:00Z" },
+    ]).returning("id");
+    await db("cycles").insert({ group_id: groups[1].id, created_at: "2026-10-01T00:00:00Z" });
+    await db("cycle_members").insert([
+      { cycle_id: cycles[0].id, user_id: member.id },
+      { cycle_id: cycles[0].id, user_id: profile.id },
+      { cycle_id: cycles[1].id, user_id: profile.id },
+    ]);
+    const result = await list();
+    assert.equal(result.current_cycle_id, cycles[1].id);
+    assert.equal(result.users.length, 2);
+    assert.equal(result.users.find(user => user.id === profile.id).is_current_cycle_member, true);
+    assert.equal(result.users.find(user => user.id === member.id).is_current_cycle_member, false);
+    for (const user of result.users) {
+      assert.equal(user.group_id, group.id);
+      assert.equal("password" in user, false);
+      assert.equal("auth_user_id" in user, false);
+    }
+  });
 
   await t.test("POST /user persists a member only in the caller's managed group", async () => {
     const handler = serverless(createApp(db, { getUser: async () => ({ id: authId }) }));

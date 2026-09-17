@@ -50,7 +50,7 @@ test("OWNER and ADMIN create member profiles in the header's group at both route
   const { state, post } = fixture();
   for (const role of ["OWNER", "ADMIN"]) {
     state.role = role;
-    for (const path of ["/user", "/api/v1/user"]) {
+    for (const path of ["/user", "/api/v1/user", "/groups/users", "/api/v1/groups/users"]) {
       const result = await post({ firstname: " Ana ", lastname: " Cruz ", username: "ana",
         email: "ana@example.test", phone: "09171234567", address: "Main Street" }, { path });
       assert.equal(result.status, 201);
@@ -74,7 +74,7 @@ test("user creation rejects missing authentication, other groups, and unauthoriz
   assert.equal((await post(undefined, { headers: { "x-group-slug": "beta" } })).status, 403);
   for (const role of ["MEMBER", "TREASURER", "AUDITOR", null, "admin"]) {
     state.role = role;
-    for (const path of ["/user", "/api/v1/user"]) assert.equal((await post(undefined, { path })).status, 403);
+    for (const path of ["/user", "/api/v1/user", "/groups/users", "/api/v1/groups/users"]) assert.equal((await post(undefined, { path })).status, 403);
   }
   state.role = "OWNER";
   for (const status of [401, 429, 502, 503]) {
