@@ -4,3 +4,8 @@ node_modules/
 !.env.example
 .DS_Store
 .serverless/
+
+# BMAD personal preferences and Python caches
+_bmad/**/config.user.toml
+_bmad/**/__pycache__/
+.agents/**/__pycache__/

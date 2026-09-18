@@ -19,6 +19,10 @@ package:
     - '!.env*'
     - '!test/**'
     - '!scripts/**'
+    - '!.agents/**'
+    - '!_bmad/**'
+    - '!_bmad-output/**'
+    - '!docs/**'
 
 functions:
   api:

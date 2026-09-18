@@ -2,6 +2,34 @@
 
 Express API configured for AWS Lambda.
 
+## BMAD development workflow
+
+BMAD Method 6.12.0 (core + BMM) is installed for Codex in `.agents/skills/`.
+Open a fresh Codex session in this repository to discover the skills, then use:
+
+- `$bmad-help` for guidance on the next workflow.
+- `$bmad-build` followed by a feature or bug description to implement a change.
+- `$bmad-code-review` to review a change.
+
+BMAD scripts require `uv` (`brew install uv` on macOS). Project context lives in
+[`docs/project-context.md`](docs/project-context.md). Planning and implementation
+artifacts go under `_bmad-output/`; shared configuration lives in `_bmad/`.
+Put durable team overrides in `_bmad/custom/config.toml`; personal
+`config.user.toml` files are gitignored. BMAD files are excluded from Lambda.
+
+Reinstall the pinned version from the project root:
+
+```bash
+npx bmad-method@6.12.0 install --modules bmm --tools codex --yes \
+  --set core.project_name=comsca-backend --set bmm.project_knowledge=docs
+```
+
+Verify configuration:
+
+```bash
+uv run _bmad/scripts/resolve_config.py --project-root "$PWD"
+```
+
 ## Run locally
 
 ```bash
