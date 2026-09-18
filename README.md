@@ -121,6 +121,14 @@ restores the previous registration behavior.
 
 ### Group users
 
+Apply migration `010_scope_group_user_list.js` before deploying. The migration
+account must be able to create roles; the runtime account must be able to
+`SET ROLE comsca_group_reader` (membership is granted to the migration account).
+The list queries run with this restricted role and a transaction-local group ID
+resolved from `x-group-slug`. PostgreSQL RLS isolates users, cycles, and cycle
+members even without application group filters. The role cannot read passwords
+or Auth IDs. Existing authenticated OWNER/ADMIN authorization still applies.
+
 `GET /groups/users` (also `GET /api/v1/groups/users`) lists users belonging to
 the group selected by `x-group-slug`. Requires a bearer access token and an
 `OWNER` or `ADMIN` database role in that group, as for user creation.

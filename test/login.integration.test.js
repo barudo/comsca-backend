@@ -90,6 +90,7 @@ test("login and RLS isolate groups on a reused database connection", {
     await trx.raw("SET LOCAL ROLE comsca_login");
     assert.deepEqual(await trx("users").select("id"), []);
   });
+  await db.migrate.down(); // Group reader RLS
   // Roll back provisioning and roles, then prove both can be applied again.
   await db.migrate.down();
   await db.migrate.down();
@@ -263,6 +264,27 @@ test("login and RLS isolate groups on a reused database connection", {
       { cycle_id: cycles[0].id, user_id: profile.id },
       { cycle_id: cycles[1].id, user_id: profile.id },
     ]);
+    // No WHERE clauses: RLS must independently isolate all three tables.
+    await db.transaction(async trx => {
+      await trx.raw("SET LOCAL ROLE comsca_group_reader");
+      assert.deepEqual(await trx("users").select("id"), []);
+      await trx.raw("SELECT set_config('app.group_id', ?, true)", [String(group.id)]);
+      assert.equal((await trx("users").select("group_id")).every(row => row.group_id === group.id), true);
+      assert.equal((await trx("cycles").select("group_id")).every(row => row.group_id === group.id), true);
+      assert.equal((await trx("cycle_members").select("user_id")).length, 3);
+      assert.deepEqual(await trx("users").select("id").where({ group_id: groups[1].id }), []);
+    });
+    await assert.rejects(db.transaction(async trx => {
+      await trx.raw("SET LOCAL ROLE comsca_group_reader");
+      await trx.raw("SELECT set_config('app.group_id', ?, true)", [String(group.id)]);
+      await trx("users").select("password");
+    }), { code: "42501" });
+    await db.transaction(async trx => {
+      await trx.raw("SET LOCAL ROLE comsca_group_reader");
+      for (const table of ["users", "cycles", "cycle_members"]) {
+        assert.deepEqual(await trx(table).select(table === "cycle_members" ? "user_id" : "id"), []);
+      }
+    });
     const result = await list();
     assert.equal(result.current_cycle_id, cycles[1].id);
     assert.equal(result.users.length, 2);

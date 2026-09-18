@@ -9,9 +9,15 @@ function fixture(t) {
   t.after(() => db.destroy());
   const authId = "11111111-1111-4111-8111-111111111111";
   const state = { role: "OWNER", cycle: { id: "7" }, authError: null, dbError: null, queries: [] };
+  Object.defineProperty(db, "transaction", { value: async callback => callback(db) });
   db.client.runner = builder => ({ run: async () => {
     const query = builder.toSQL();
     state.queries.push(query);
+    if (query.sql === "SET LOCAL ROLE comsca_group_reader") return {};
+    if (query.sql.includes("set_config")) {
+      assert.deepEqual(query.bindings, ["1"]);
+      return {};
+    }
     if (query.sql.includes('from "groups"')) {
       return query.bindings[0] === "alpha" ? { id: "1", slug: "alpha" } :
         query.bindings[0] === "beta" ? { id: "2", slug: "beta" } : undefined;
