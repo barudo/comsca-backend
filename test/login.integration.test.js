@@ -90,6 +90,83 @@ test("login and RLS isolate groups on a reused database connection", {
     await trx.raw("SET LOCAL ROLE comsca_login");
     assert.deepEqual(await trx("users").select("id"), []);
   });
+  await t.test("cycle status backfills, validates, isolates active cycles, and rolls back", async () => {
+    await db.migrate.down(); // Remove 011 to exercise pre-existing rows.
+    const existing = await db("cycles").insert([
+      { group_id: groups[0].id, interest_rate: "2.500000", interest_period: "MONTHLY", interest_method: "SIMPLE", cost_per_share: "100.00" },
+      { group_id: groups[0].id }, { group_id: groups[1].id },
+    ]).returning("id");
+    const ids = existing.map(row => row.id);
+    const member = await db("users").where({ group_id: groups[0].id }).first("id");
+    await db("cycle_members").insert({ cycle_id: ids[0], user_id: member.id });
+    const before = await db("cycles").whereIn("id", ids).orderBy("id");
+    const membership = await db("cycle_members").where({ cycle_id: ids[0] });
+    await db.migrate.latest();
+    const withoutStatus = rows => rows.map(({ status, ...row }) => row);
+    assert.deepEqual(withoutStatus(await db("cycles").whereIn("id", ids).orderBy("id")), before);
+    assert.deepEqual(await db("cycle_members").where({ cycle_id: ids[0] }), membership);
+    assert.deepEqual((await db("cycles").whereIn("id", ids).orderBy("id").select("status")).map(row => row.status),
+      ["inactive", "inactive", "inactive"]);
+    const [defaultCycle] = await db("cycles").insert({ group_id: groups[0].id }).returning(["id", "status"]);
+    ids.push(defaultCycle.id);
+    assert.equal(defaultCycle.status, "inactive");
+    for (const status of ["active", "inactive", "distributing"]) {
+      await db("cycles").where({ id: ids[0] }).update({ status });
+    }
+    for (const status of ["ACTIVE", "ended", ""]) {
+      await assert.rejects(db("cycles").where({ id: ids[0] }).update({ status }), { code: "23514" });
+    }
+    await assert.rejects(db("cycles").where({ id: ids[0] }).update({ status: null }), { code: "23502" });
+    await db("cycles").where({ id: ids[0] }).update({ status: "active" });
+    await db("cycles").where({ id: ids[2] }).update({ status: "active" });
+    await assert.rejects(db("cycles").insert({ group_id: groups[0].id, status: "active" }),
+      { code: "23505", constraint: "cycles_one_active_per_group" });
+    await assert.rejects(db("cycles").where({ id: ids[1] }).update({ status: "active" }), { code: "23505" });
+    await db("cycles").where({ id: ids[0] }).update({ status: "distributing" });
+    await db("cycles").where({ id: ids[1] }).update({ status: "active" });
+    await db("cycles").where({ id: ids[1] }).update({ status: "inactive" });
+    await db("cycles").where({ id: defaultCycle.id }).update({ status: "distributing" });
+
+    // Two actual connections race to activate cycles in the same group.
+    const concurrent = knex({ client: "pg", connection: process.env.TEST_DATABASE_URL, pool: { min: 0, max: 2 } });
+    try {
+      const first = await concurrent.transaction();
+      const second = await concurrent.transaction();
+      try {
+        await first("cycles").where({ id: ids[0] }).update({ status: "active" });
+        const { rows: [{ pid }] } = await second.raw("SELECT pg_backend_pid() AS pid");
+        const competing = second("cycles").where({ id: ids[1] }).update({ status: "active" })
+          .then(() => null, error => error);
+        // Observe the actual lock wait before releasing the first writer.
+        let blocked = false;
+        for (let attempt = 0; attempt < 100; attempt++) {
+          const { rows } = await db.raw("SELECT cardinality(pg_blocking_pids(?)) > 0 AS blocked", [pid]);
+          if (rows[0].blocked) { blocked = true; break; }
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        assert.equal(blocked, true, "Competing activation must wait on the first transaction");
+        await first.commit();
+        const error = await competing;
+        assert.equal(error?.code, "23505");
+        assert.equal(error?.constraint, "cycles_one_active_per_group");
+      } finally {
+        if (!first.isCompleted()) await first.rollback();
+        if (!second.isCompleted()) await second.rollback();
+      }
+    } finally {
+      await concurrent.destroy();
+    }
+    await db.migrate.down();
+    assert.equal(await db.schema.hasColumn("cycles", "status"), false);
+    assert.equal((await db("cycles").whereIn("id", ids)).length, ids.length);
+    assert.deepEqual(await db("cycles").whereIn("id", existing.map(row => row.id)).orderBy("id"), before);
+    assert.deepEqual(await db("cycle_members").where({ cycle_id: ids[0] }), membership);
+    await db.migrate.latest();
+    assert.equal((await db("cycles").whereIn("id", ids).select("status")).every(row => row.status === "inactive"), true);
+    await db("cycles").whereIn("id", ids).del();
+  });
+
+  await db.migrate.down(); // Cycle status
   await db.migrate.down(); // Group reader RLS
   // Roll back provisioning and roles, then prove both can be applied again.
   await db.migrate.down();
@@ -165,7 +242,8 @@ test("login and RLS isolate groups on a reused database connection", {
     await assert.rejects(db("transaction_entries").where({ transaction_id: id, account_id: interest.id })
       .update({ credit: "99.00" }), { code: "23514" });
     await assert.rejects(db("transaction_entries").where({ transaction_id: id }).del(), { code: "23514" });
-    await assert.rejects(db("accounts").where({ id: cash.id }).del(), { code: "23503" });
+    await assert.rejects(db("accounts").where({ id: cash.id }).del(), error =>
+      ["23503", "23001"].includes(error.code) && error.constraint === "transaction_entries_group_account_fk");
     assert.equal((await db("transactions").where({ group_id })).length, 1);
     const { rows } = await db.raw(`SELECT relname FROM pg_class
       WHERE relname IN ('accounts', 'transaction_entries') AND relrowsecurity`);
@@ -320,4 +398,55 @@ test("login and RLS isolate groups on a reused database connection", {
     assert.equal((await postMember(group.slug)).status, 403);
     await db("users").where({ id: profile.id }).update({ role: "OWNER" });
   });
+  await t.test("POST /cycles persists settings, enforces group authorization and active conflicts", async () => {
+    const handler = serverless(createApp(db, { getUser: async () => ({ id: authId }) }));
+    const post = async (body, slug = group.slug) => {
+      const response = await handler({ version: "2.0", rawPath: "/cycles", rawQueryString: "",
+        headers: { "content-type": "application/json", authorization: "Bearer verified-token", "x-group-slug": slug },
+        requestContext: { http: { method: "POST", sourceIp: "127.0.0.1" } },
+        body: JSON.stringify(body), isBase64Encoded: false }, {});
+      return { status: response.statusCode, body: JSON.parse(response.body) };
+    };
+    assert.equal((await post({}, "alpha")).status, 403);
+    const created = await post({ interest_rate: "2.500000", interest_period: "MONTHLY",
+      interest_method: "COMPOUND", cost_per_share: "9999999999999999.99", status: "active" });
+    assert.equal(created.status, 201);
+    const cycle = await db("cycles").where({ id: created.body.cycle.id }).first();
+    assert.equal(cycle.group_id, group.id);
+    assert.equal(cycle.interest_rate, "2.500000");
+    assert.equal(cycle.cost_per_share, "9999999999999999.99");
+    assert.equal(cycle.status, "active");
+    assert.equal(created.body.cycle.created_at, cycle.created_at.toISOString());
+    assert.equal(created.body.cycle.updated_at, cycle.updated_at.toISOString());
+    assert.equal((await post({ status: "active" })).status, 409);
+    await db("users").where({ id: profile.id }).update({ role: "ADMIN" });
+    const inactive = await post({});
+    assert.equal(inactive.status, 201);
+    assert.equal(inactive.body.cycle.status, "inactive");
+
+    // A committed role revocation must take effect before an awaiting create.
+    const locker = knex({ client: "pg", connection: process.env.TEST_DATABASE_URL, pool: { min: 0, max: 1 } });
+    const { rows: [{ pid }] } = await db.raw("SELECT pg_backend_pid() AS pid");
+    const before = await db("cycles").where({ group_id: group.id }).count("id as count").first();
+    const revocation = await locker.transaction();
+    try {
+      await revocation("users").where({ id: profile.id }).update({ role: "MEMBER" });
+      const pending = post({});
+      let blocked = false;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const { rows } = await revocation.raw("SELECT cardinality(pg_blocking_pids(?)) > 0 AS blocked", [pid]);
+        if (rows[0].blocked) { blocked = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      assert.equal(blocked, true, "Create must wait for role revocation");
+      await revocation.commit();
+      assert.equal((await pending).status, 403);
+      assert.deepEqual(await db("cycles").where({ group_id: group.id }).count("id as count").first(), before);
+    } finally {
+      if (!revocation.isCompleted()) await revocation.rollback();
+      await locker.destroy();
+    }
+    await db("users").where({ id: profile.id }).update({ role: "OWNER" });
+  });
+
 });

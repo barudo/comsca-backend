@@ -21,6 +21,7 @@ function createApp(database = db, services = {}) {
   app.use(["/groups/users", "/api/v1/groups/users"], require("./routes/group-user-accounts"));
   app.use(["/user", "/api/v1/user", "/groups/users", "/api/v1/groups/users"], require("./routes/group-users"));
   app.use(["/users", "/api/v1/users"], require("./routes/users"));
+  app.use(["/cycles", "/api/v1/cycles"], require("./routes/cycles"));
 
   app.get("/", (_request, response) => {
     response.json({

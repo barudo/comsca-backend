@@ -57,6 +57,62 @@ npm run migrate:rollback
 The initial migration creates groups, users, cycles, and cycle membership tables.
 Users and cycles belong to a group, while `cycle_members` links users to cycles.
 
+Migration `011_add_cycle_status.js` adds a required cycle status:
+`active`, `inactive`, or `distributing` (the cycle has ended and proceeds are
+being distributed to members). Existing cycles become `inactive`; new cycles
+default to `inactive`. A partial unique index permits at most one `active`
+cycle per group, including concurrent inserts and updates. Multiple inactive or
+distributing cycles are allowed. Rolling back removes status labels and the
+uniqueness rule while retaining cycle rows.
+
+## Create a cycle
+
+`POST /cycles` (also `/api/v1/cycles`) requires a Bearer token and an OWNER or
+ADMIN database profile in the group selected by `x-group-slug`.
+Apply migration `011_add_cycle_status.js` before deploying this endpoint.
+
+```http
+POST /cycles
+Authorization: Bearer <access-token>
+x-group-slug: your-group
+Content-Type: application/json
+
+{
+  "interest_rate": "2.500000",
+  "interest_period": "MONTHLY",
+  "interest_method": "COMPOUND",
+  "cost_per_share": "100.00",
+  "status": "active"
+}
+```
+
+- `interest_rate`: nonnegative decimal, at most 3 integer digits and 6 decimal
+  places (`numeric(9,6)`). Zero is valid.
+- `interest_period`: `DAILY`, `WEEKLY`, `MONTHLY`, or `YEARLY`.
+- `interest_method`: `SIMPLE` or `COMPOUND`.
+- Supply all three interest fields together, or leave all three null/omitted.
+- `cost_per_share`: optional/null, otherwise greater than zero, at most 16
+  integer digits and 2 decimal places (`numeric(18,2)`).
+- `status`: `active`, `inactive`, or `distributing`; defaults to `inactive`.
+
+Decimals accept JSON numbers or fixed-point decimal strings. Numeric inputs are
+validated after JavaScript JSON parsing, which can round the original value;
+use strings for exact monetary values and exact decimal-place validation.
+Scientific notation in strings and excess decimal places are rejected.
+Amounts above JavaScript's safe integer range must be
+sent as strings. `{}` creates an inactive cycle with unset financial settings.
+The group comes from the header; client-supplied `group_id`, IDs, timestamps,
+and other unsupported fields are rejected.
+
+Success returns HTTP 201 with `{ "success": true, "cycle": { ... } }`, including
+the saved ID, group ID, financial settings, status, and timestamps. Invalid input
+returns 400, missing/invalid authentication 401, missing group membership or an
+unauthorized role 403, unknown group 404, and a second active cycle in the same
+group 409. `current_cycle_id` in the existing group-user listing still refers to
+the latest-created cycle; this endpoint does not change that lookup.
+
+## Financial migrations
+
 Migration `005_create_transactions.js` adds business transactions. Every transaction
 requires a `group_id`, a positive `amount` (18 digits, including 2 decimal places),
 and a `type` in uppercase snake case. Suggested types are `EQUITY`,
