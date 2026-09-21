@@ -449,4 +449,139 @@ test("login and RLS isolate groups on a reused database connection", {
     await db("users").where({ id: profile.id }).update({ role: "OWNER" });
   });
 
+  await t.test("PATCH /cycles persists partial edits and enforces the lifecycle atomically", async () => {
+    const handler = serverless(createApp(db, { getUser: async () => ({ id: authId }) }));
+    const patch = async (id, body, slug = group.slug) => {
+      const response = await handler({ version: "2.0", rawPath: `/cycles/${id}`, rawQueryString: "",
+        headers: { "content-type": "application/json", authorization: "Bearer verified-token", "x-group-slug": slug },
+        requestContext: { http: { method: "PATCH", sourceIp: "127.0.0.1" } },
+        body: JSON.stringify(body), isBase64Encoded: false }, {});
+      return { status: response.statusCode, body: JSON.parse(response.body) };
+    };
+    const [target] = await db("cycles").insert({ group_id: group.id, interest_rate: "2.500000",
+      interest_period: "MONTHLY", interest_method: "COMPOUND", cost_per_share: "100.00",
+      created_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-01T00:00:00Z" }).returning("*");
+    const [foreign] = await db("cycles").insert({ group_id: groups[0].id }).returning("id");
+    assert.equal((await patch(foreign.id, { cost_per_share: "200" })).status, 404);
+    assert.equal((await patch(target.id, { cost_per_share: "200" }, "alpha")).status, 403);
+    await db("users").where({ id: profile.id }).update({ role: "ADMIN" });
+    const edited = await patch(target.id, { interest_rate: "3.500000" });
+    assert.equal(edited.status, 200);
+    assert.equal(edited.body.cycle.interest_rate, "3.500000");
+    assert.equal(edited.body.cycle.interest_period, "MONTHLY");
+    assert.equal(edited.body.cycle.cost_per_share, "100.00");
+    assert.equal(edited.body.cycle.created_at, target.created_at.toISOString());
+    assert.notEqual(edited.body.cycle.updated_at, target.updated_at.toISOString());
+    assert.equal((await patch(target.id, { interest_rate: null })).status, 400);
+    assert.equal((await patch(target.id, { status: "distributing" })).status, 409);
+    const beforeConflict = await db("cycles").where({ id: target.id }).first();
+    assert.equal((await patch(target.id, { status: "active", cost_per_share: "200" })).status, 409);
+    assert.deepEqual(await db("cycles").where({ id: target.id }).first(), beforeConflict);
+    const previousActive = await db("cycles").where({ group_id: group.id, status: "active" }).first("id");
+    assert.equal((await patch(previousActive.id, { status: "inactive" })).status, 409);
+    assert.equal((await patch(previousActive.id, { status: "distributing" })).status, 200);
+    assert.equal((await patch(target.id, { status: "active", cost_per_share: "200" })).status, 200);
+    const active = await db("cycles").where({ id: target.id }).first();
+    assert.equal((await patch(target.id, { status: "distributing", cost_per_share: "300" })).status, 409);
+    assert.deepEqual(await db("cycles").where({ id: target.id }).first(), active);
+    assert.equal((await patch(target.id, { status: "distributing" })).status, 200);
+    const final = await db("cycles").where({ id: target.id }).first();
+    for (const body of [{ status: "active" }, { status: "inactive" }, { cost_per_share: "300" }]) {
+      assert.equal((await patch(target.id, body)).status, 409);
+    }
+    assert.equal((await patch(target.id, { status: "distributing" })).status, 200);
+    assert.deepEqual(await db("cycles").where({ id: target.id }).first(), final);
+    await db("users").where({ id: profile.id }).update({ role: "OWNER" });
+
+    // Observe lock waits to prove checks run on the latest committed state.
+    const locker = knex({ client: "pg", connection: process.env.TEST_DATABASE_URL, pool: { min: 0, max: 1 } });
+    try {
+      const [raceCycle] = await db("cycles").insert({ group_id: group.id, cost_per_share: "100.00" }).returning("id");
+      for (const race of ["activation", "revocation", "financial-edit"]) {
+        await db("users").where({ id: profile.id }).update({ role: "OWNER" });
+        if (race !== "activation") await db("cycles").where({ id: raceCycle.id }).update({ status: "inactive" });
+        const { rows: [{ pid }] } = await db.raw("SELECT pg_backend_pid() AS pid");
+        const writer = await locker.transaction();
+        let pending;
+        try {
+          if (race === "activation") {
+            await writer("cycles").where({ id: raceCycle.id }).update({ status: "active" });
+          } else if (race === "revocation") {
+            await writer("users").where({ id: profile.id }).update({ role: "MEMBER" });
+          } else {
+            await writer("cycles").where({ id: raceCycle.id }).update({ cost_per_share: "150" });
+          }
+          pending = patch(raceCycle.id, { cost_per_share: "200" });
+          let blocked = false;
+          for (let attempt = 0; attempt < 100; attempt++) {
+            const { rows } = await writer.raw("SELECT cardinality(pg_blocking_pids(?)) > 0 AS blocked", [pid]);
+            if (rows[0].blocked) { blocked = true; break; }
+            await new Promise(resolve => setTimeout(resolve, 20));
+          }
+          assert.equal(blocked, true, `Patch must wait for ${race}`);
+          const { rows: [{ released_at }] } = await writer.raw("SELECT clock_timestamp() AS released_at");
+          await writer.commit();
+          const result = await pending;
+          assert.equal(result.status, race === "activation" ? 409 : race === "revocation" ? 403 : 200);
+          assert.equal((await db("cycles").where({ id: raceCycle.id }).first()).cost_per_share,
+            race === "financial-edit" ? "200.00" : "100.00");
+          if (race === "financial-edit") assert.ok(new Date(result.body.cycle.updated_at) >= released_at);
+        } finally {
+          if (!writer.isCompleted()) await writer.rollback();
+          if (pending) await pending;
+        }
+      }
+    } finally {
+      await locker.destroy();
+      await db("users").where({ id: profile.id }).update({ role: "OWNER" });
+    }
+  });
+
+  await t.test("concurrent PATCH activations allow one winner and roll back the losing financial edits", async () => {
+    const otherAuthId = "55555555-5555-4555-8555-555555555555";
+    await db("auth.users").insert({ id: otherAuthId });
+    await db("users").insert({ auth_user_id: otherAuthId, group_id: group.id,
+      first_name: "Another", family_name: "Admin", role: "ADMIN" });
+    const targets = await db("cycles").insert([
+      { group_id: group.id, cost_per_share: "100.00" },
+      { group_id: group.id, cost_per_share: "100.00" },
+    ]).returning("id");
+    const connections = [0, 1].map(() => knex({ client: "pg", connection: process.env.TEST_DATABASE_URL, pool: { min: 0, max: 1 } }));
+    const identities = [authId, otherAuthId];
+    let gate;
+    let pending = [];
+    try {
+      const pids = await Promise.all(connections.map(async connection =>
+        (await connection.raw("SELECT pg_backend_pid() AS pid")).rows[0].pid));
+      gate = await db.transaction();
+      await gate("cycles").whereIn("id", targets.map(row => row.id)).forUpdate().select("id");
+      pending = connections.map((connection, i) => serverless(createApp(connection, {
+        getUser: async () => ({ id: identities[i] }),
+      }))({ version: "2.0", rawPath: `/cycles/${targets[i].id}`, rawQueryString: "",
+        headers: { "content-type": "application/json", authorization: "Bearer verified-token", "x-group-slug": group.slug },
+        requestContext: { http: { method: "PATCH", sourceIp: "127.0.0.1" } },
+        body: JSON.stringify({ status: "active", cost_per_share: "200" }), isBase64Encoded: false }, {}));
+      let bothBlocked = false;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const { rows } = await gate.raw(`SELECT cardinality(pg_blocking_pids(?)) > 0
+          AND cardinality(pg_blocking_pids(?)) > 0 AS blocked`, pids);
+        if (rows[0].blocked) { bothBlocked = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      assert.equal(bothBlocked, true, "Both authorized requests must reach the cycle locks before release");
+      await gate.commit();
+      const results = await Promise.all(pending);
+      assert.deepEqual(results.map(result => result.statusCode).sort(), [200, 409]);
+      for (let i = 0; i < results.length; i++) {
+        const row = await db("cycles").where({ id: targets[i].id }).first();
+        assert.equal(row.status, results[i].statusCode === 200 ? "active" : "inactive");
+        assert.equal(row.cost_per_share, results[i].statusCode === 200 ? "200.00" : "100.00");
+      }
+    } finally {
+      if (gate && !gate.isCompleted()) await gate.rollback();
+      await Promise.allSettled(pending);
+      await Promise.all(connections.map(connection => connection.destroy()));
+    }
+  });
+
 });

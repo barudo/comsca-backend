@@ -111,6 +111,42 @@ unauthorized role 403, unknown group 404, and a second active cycle in the same
 group 409. `current_cycle_id` in the existing group-user listing still refers to
 the latest-created cycle; this endpoint does not change that lookup.
 
+## Update a cycle
+
+`PATCH /cycles/:id` (also `/api/v1/cycles/:id`) requires a Bearer token and
+an OWNER or ADMIN database profile in the group selected by `x-group-slug`.
+It returns HTTP 200 with `{ "success": true, "cycle": { ... } }`.
+
+Send only the fields to change. Financial fields use the same values and decimal
+limits as creation. Omitted fields retain their saved values; the resulting
+interest settings must still contain either all three fields or three nulls.
+An empty object is rejected. IDs, group IDs, timestamps, and unknown fields cannot
+be set by the client.
+
+| Saved status | Financial edits | Allowed next status |
+| --- | --- | --- |
+| `inactive` | Allowed | `active` |
+| `active` | Rejected | `distributing` |
+| `distributing` | Rejected | None |
+
+For example, edit an inactive cycle with `{ "cost_per_share": "150.00" }`,
+activate it with `{ "status": "active" }`, then begin distribution with
+`{ "status": "distributing" }`. Status values are lowercase. Financial edits
+may accompany activation of an inactive cycle in the same atomic request.
+Financial fields on active/distributing cycles are rejected even if the supplied
+values match their current values. Status-only requests repeating the saved
+status succeed without writing or changing `updated_at`.
+
+Invalid input or a missing `x-group-slug` header returns 400; an unknown group
+slug returns 404. Missing/invalid authentication returns 401, a caller without
+OWNER/ADMIN membership in the selected group 403, and a missing or other-group
+cycle 404. Invalid transitions, financial edits to a frozen cycle, and attempts
+to activate a second cycle in the same group return 409. Failed requests leave
+all cycle fields unchanged. Successful writes refresh `updated_at` and preserve
+`created_at`. The actor and cycle are locked within the transaction so role
+revocation and simultaneous status changes cannot bypass these checks.
+This endpoint uses migration 011's existing schema; no new migration is needed.
+
 ## Financial migrations
 
 Migration `005_create_transactions.js` adds business transactions. Every transaction
