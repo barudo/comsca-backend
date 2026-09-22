@@ -102,6 +102,7 @@ test("login and RLS isolate groups on a reused database connection", {
     assert.deepEqual(await trx("users").select("id"), []);
   });
   await t.test("cycle status backfills, validates, isolates active cycles, and rolls back", async () => {
+    await db.migrate.down(); // Remove 013 column grants.
     await db.migrate.down(); // Remove 012 before exercising the legacy migration.
     await db.migrate.down(); // Remove 011 to exercise pre-existing rows.
     const existing = await db("cycles").insert([
@@ -180,6 +181,7 @@ test("login and RLS isolate groups on a reused database connection", {
   });
 
   await t.test("current-cycle migration preserves history and blocks ambiguous ongoing groups atomically", async () => {
+    await db.migrate.down(); // Remove 013 column grants.
     await db.migrate.down(); // 012: exercise actual legacy data under 011.
     const [legacy, active, distributing, conflict] = await db("cycles").insert([
       { group_id: groups[0].id, status: "inactive", cost_per_share: "100.00" },
@@ -222,6 +224,7 @@ test("login and RLS isolate groups on a reused database connection", {
     const [draft] = await db("cycles").insert({ group_id: emptyGroup.id }).returning("*");
     assert.equal(draft.status, "draft");
     await db("cycles").insert([{ group_id: emptyGroup.id, status: "closed" }, { group_id: emptyGroup.id, status: "closed" }]);
+    await db.migrate.down(); // Remove 013 column grants.
     await db.migrate.down();
     assert.equal((await db("cycles").where({ id: draft.id }).first()).status, "inactive");
     assert.deepEqual(await db("cycles").where({ id: legacy.id }).first(), legacy);
@@ -236,6 +239,7 @@ test("login and RLS isolate groups on a reused database connection", {
     await db("groups").where({ id: emptyGroup.id }).del();
   });
 
+  await db.migrate.down(); // Cycle list column grants
   await db.migrate.down(); // Current-cycle lifecycle
   await db.migrate.down(); // Cycle status
   await db.migrate.down(); // Group reader RLS
@@ -656,4 +660,67 @@ test("login and RLS isolate groups on a reused database connection", {
       await Promise.all(connections.map(connection => connection.destroy()));
     }
   });
+  await t.test("GET cycles uses RLS, identifies current independently of ordering, and restores grants", async () => {
+    const [listGroup] = await db("groups").insert({ name: "Cycle listing", slug: "cycle-listing" }).returning("id");
+    const listAuthId = "66666666-6666-4666-8666-666666666666";
+    await db("auth.users").insert({ id: listAuthId });
+    const [actor] = await db("users").insert({ auth_user_id: listAuthId, group_id: listGroup.id,
+      first_name: "List", family_name: "Owner", role: "OWNER" }).returning("id");
+    const handler = serverless(createApp(db, { getUser: async () => ({ id: listAuthId }) }));
+    const list = async (path = "/api/v1/cycles") => {
+      const result = await handler({ version: "2.0", rawPath: path, rawQueryString: `group_id=${groups[0].id}`,
+        headers: { authorization: "Bearer verified-token", "x-group-slug": "cycle-listing" },
+        requestContext: { http: { method: "GET", sourceIp: "127.0.0.1" } } }, {});
+      return { status: result.statusCode, body: JSON.parse(result.body) };
+    };
+    assert.deepEqual((await list()).body, { success: true, current_cycle_id: null, cycles: [] });
+    const [current, older, newer] = await db("cycles").insert([
+      { group_id: listGroup.id, status: "draft", created_at: "2026-09-01T00:00:00Z",
+        interest_rate: "2.500000", interest_period: "MONTHLY", interest_method: "SIMPLE", cost_per_share: "9999999999999999.99" },
+      { group_id: listGroup.id, status: "closed", created_at: "2026-10-01T00:00:00Z" },
+      { group_id: listGroup.id, status: "closed", created_at: "2026-10-01T00:00:00Z" },
+    ]).returning("id");
+    for (const role of ["OWNER", "ADMIN"]) {
+      await db("users").where({ id: actor.id }).update({ role });
+      for (const route of ["/cycles", "/api/v1/cycles"]) {
+        const result = await list(route);
+        assert.equal(result.status, 200);
+        assert.equal(result.body.current_cycle_id, current.id);
+        assert.deepEqual(result.body.cycles.map(row => row.id), [newer.id, older.id, current.id]);
+        assert.equal(result.body.cycles.every(row => row.group_id === listGroup.id), true);
+        assert.equal(result.body.cycles[2].cost_per_share, "9999999999999999.99");
+        const saved = await db("cycles").where({ group_id: listGroup.id }).orderBy("created_at", "desc").orderBy("id", "desc");
+        assert.deepEqual(result.body.cycles, JSON.parse(JSON.stringify(saved)));
+      }
+    }
+    for (const status of ["active", "distributing", "closed"]) {
+      await db("cycles").where({ id: current.id }).update({ status });
+      assert.equal((await list()).body.current_cycle_id, status === "closed" ? null : current.id);
+    }
+    // Omit the application group filter: RLS must still protect every granted column.
+    await db.transaction(async trx => {
+      await trx.raw("SET LOCAL ROLE comsca_group_reader");
+      await trx.raw("SELECT set_config('app.group_id', ?, true)", [String(listGroup.id)]);
+      const visible = await trx("cycles").select("group_id", "interest_rate", "interest_period", "interest_method", "cost_per_share", "updated_at");
+      assert.equal(visible.length, 3);
+      assert.equal(visible.every(row => row.group_id === listGroup.id), true);
+    });
+    await db.transaction(async trx => {
+      await trx.raw("SET LOCAL ROLE comsca_group_reader");
+      assert.deepEqual(await trx("cycles").select("cost_per_share"), []);
+    });
+    await db.migrate.down(); // 013 only; original grants must survive.
+    await assert.rejects(db.transaction(async trx => {
+      await trx.raw("SET LOCAL ROLE comsca_group_reader");
+      await trx("cycles").select("cost_per_share");
+    }), { code: "42501" });
+    await db.transaction(async trx => {
+      await trx.raw("SET LOCAL ROLE comsca_group_reader");
+      await trx.raw("SELECT set_config('app.group_id', ?, true)", [String(listGroup.id)]);
+      assert.equal((await trx("cycles").select("id", "group_id", "created_at", "status")).length, 3);
+    });
+    await db.migrate.latest();
+    assert.equal((await list()).status, 200);
+  });
+
 });

@@ -60,6 +60,28 @@ function cycleInput(body, current) {
   return values;
 }
 
+router.get("/", authenticate, async (request, response, next) => {
+  try {
+    const db = request.app.locals.database;
+    const actor = await db("users").where({
+      auth_user_id: request.authUser.id, group_id: request.group.id,
+    }).first("id", "role");
+    if (!actor || !["OWNER", "ADMIN"].includes(actor.role)) {
+      return response.status(403).json({ success: false, error: "Only an OWNER or ADMIN of this group can list cycles" });
+    }
+    const cycles = await db.transaction(async trx => {
+      await trx.raw("SET LOCAL ROLE comsca_group_reader");
+      await trx.raw("SELECT set_config('app.group_id', ?, true)", [String(request.group.id)]);
+      return trx("cycles").where({ group_id: request.group.id }).select(cycleColumns)
+        .orderBy("created_at", "desc").orderBy("id", "desc");
+    });
+    const current = cycles.find(cycle => cycle.status !== "closed");
+    return response.json({ success: true, current_cycle_id: current?.id ?? null, cycles });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.post("/", authenticate, async (request, response, next) => {
   try {
     const cycle = await request.app.locals.database.transaction(async trx => {
