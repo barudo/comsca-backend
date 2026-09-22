@@ -28,8 +28,8 @@ function fixture(t) {
     }
     if (state.dbError) throw state.dbError;
     if (query.sql.includes('from "cycles"')) {
-      assert.match(query.sql, /where "group_id" = \? order by "created_at" desc, "id" desc/);
-      assert.deepEqual(query.bindings, ["1", 1]);
+      assert.match(query.sql, /where "group_id" = \? and "status" <> \?/);
+      assert.deepEqual(query.bindings, ["1", "closed", 1]);
       return state.cycle;
     }
     assert.match(query.sql, /left join "cycle_members" as "cm" on "cm"\."user_id" = "u"\."id" and "cm"\."cycle_id" = \?/);
@@ -52,7 +52,7 @@ function fixture(t) {
   return { state, get };
 }
 
-test("group user list scopes membership to the selected group's latest cycle on both paths", async t => {
+test("group user list scopes membership to the selected group's non-closed current cycle on both paths", async t => {
   const { state, get } = fixture(t);
   for (const role of ["OWNER", "ADMIN"]) {
     state.role = role;

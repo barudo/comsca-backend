@@ -57,19 +57,23 @@ npm run migrate:rollback
 The initial migration creates groups, users, cycles, and cycle membership tables.
 Users and cycles belong to a group, while `cycle_members` links users to cycles.
 
-Migration `011_add_cycle_status.js` adds a required cycle status:
-`active`, `inactive`, or `distributing` (the cycle has ended and proceeds are
-being distributed to members). Existing cycles become `inactive`; new cycles
-default to `inactive`. A partial unique index permits at most one `active`
-cycle per group, including concurrent inserts and updates. Multiple inactive or
-distributing cycles are allowed. Rolling back removes status labels and the
-uniqueness rule while retaining cycle rows.
+Migration `012_current_cycle_lifecycle.js` replaces migration 011's legacy
+`inactive` status with `draft` and `closed`. The lifecycle is:
+
+`draft → active → distributing → closed`
+
+The **current cycle** is the group's only non-closed cycle, regardless of its
+creation date. PostgreSQL enforces at most one non-closed cycle per group,
+including competing requests. Past/closed cycles are read-only through the API.
+New cycles start as drafts; another draft cannot be created until the current
+cycle is closed. See [cycle lifecycle deployment](docs/cycle-lifecycle.md) for
+migration conversion, preflight checks, API compatibility changes, and rollback.
 
 ## Create a cycle
 
 `POST /cycles` (also `/api/v1/cycles`) requires a Bearer token and an OWNER or
 ADMIN database profile in the group selected by `x-group-slug`.
-Apply migration `011_add_cycle_status.js` before deploying this endpoint.
+Apply migration `012_current_cycle_lifecycle.js` before deploying this version.
 
 ```http
 POST /cycles
@@ -82,7 +86,7 @@ Content-Type: application/json
   "interest_period": "MONTHLY",
   "interest_method": "COMPOUND",
   "cost_per_share": "100.00",
-  "status": "active"
+  "status": "draft"
 }
 ```
 
@@ -93,23 +97,23 @@ Content-Type: application/json
 - Supply all three interest fields together, or leave all three null/omitted.
 - `cost_per_share`: optional/null, otherwise greater than zero, at most 16
   integer digits and 2 decimal places (`numeric(18,2)`).
-- `status`: `active`, `inactive`, or `distributing`; defaults to `inactive`.
+- `status`: optional; if supplied it must be `draft`. All other values are rejected.
 
 Decimals accept JSON numbers or fixed-point decimal strings. Numeric inputs are
 validated after JavaScript JSON parsing, which can round the original value;
 use strings for exact monetary values and exact decimal-place validation.
 Scientific notation in strings and excess decimal places are rejected.
 Amounts above JavaScript's safe integer range must be
-sent as strings. `{}` creates an inactive cycle with unset financial settings.
+sent as strings. `{}` creates a draft cycle with unset financial settings.
 The group comes from the header; client-supplied `group_id`, IDs, timestamps,
 and other unsupported fields are rejected.
 
 Success returns HTTP 201 with `{ "success": true, "cycle": { ... } }`, including
 the saved ID, group ID, financial settings, status, and timestamps. Invalid input
 returns 400, missing/invalid authentication 401, missing group membership or an
-unauthorized role 403, unknown group 404, and a second active cycle in the same
-group 409. `current_cycle_id` in the existing group-user listing still refers to
-the latest-created cycle; this endpoint does not change that lookup.
+unauthorized role 403, unknown group 404, and an existing non-closed cycle in the
+same group 409. `current_cycle_id` in the group-user listing identifies the sole
+non-closed cycle, never a newer historical row.
 
 ## Update a cycle
 
@@ -125,17 +129,23 @@ be set by the client.
 
 | Saved status | Financial edits | Allowed next status |
 | --- | --- | --- |
-| `inactive` | Allowed | `active` |
+| `draft` | Allowed | `active` |
 | `active` | Rejected | `distributing` |
-| `distributing` | Rejected | None |
+| `distributing` | Rejected | `closed` |
+| `closed` | Rejected | None (all updates rejected) |
 
-For example, edit an inactive cycle with `{ "cost_per_share": "150.00" }`,
+For example, edit a draft cycle with `{ "cost_per_share": "150.00" }`,
 activate it with `{ "status": "active" }`, then begin distribution with
-`{ "status": "distributing" }`. Status values are lowercase. Financial edits
-may accompany activation of an inactive cycle in the same atomic request.
+`{ "status": "distributing" }`. After payouts are complete, close it with
+`{ "status": "closed" }`; a new draft can then be created. Closing records the
+manager's confirmation; this endpoint does not calculate or verify payouts.
+Status values are lowercase. Financial edits may accompany activation of a draft
+in the same atomic request.
 Financial fields on active/distributing cycles are rejected even if the supplied
 values match their current values. Status-only requests repeating the saved
-status succeed without writing or changing `updated_at`.
+non-closed status succeed without writing or changing `updated_at`. Every PATCH
+on a closed cycle returns 409, including status-only retries, empty requests,
+and attempts to reactivate it.
 
 Invalid input or a missing `x-group-slug` header returns 400; an unknown group
 slug returns 404. Missing/invalid authentication returns 401, a caller without
@@ -145,7 +155,7 @@ to activate a second cycle in the same group return 409. Failed requests leave
 all cycle fields unchanged. Successful writes refresh `updated_at` and preserve
 `created_at`. The actor and cycle are locked within the transaction so role
 revocation and simultaneous status changes cannot bypass these checks.
-This endpoint uses migration 011's existing schema; no new migration is needed.
+This version requires migration 012; see the deployment notes linked above.
 
 ## Financial migrations
 
@@ -266,10 +276,10 @@ Each user includes `id`, `group_id`, `first_name`, `family_name`, `username`,
 login access are included. Results include all group users, ordered by family
 name, first name, and ID.
 
-Until an explicit cycle lifecycle is introduced, **current cycle means the most
-recently created cycle in that group**, ordered by `created_at DESC, id DESC`.
-Membership in older cycles does not count. With no cycle, `current_cycle_id` is
-null and every membership flag is false. Query parameters cannot override the
+The **current cycle is the sole non-closed cycle in the group** (`draft`,
+`active`, or `distributing`). Membership in closed cycles does not count, even
+when a closed cycle has a newer creation date. With no current cycle,
+`current_cycle_id` is null and every membership flag is false. Query parameters cannot override the
 group or cycle selection. Returns `400` for a missing group header, `401` for
 missing/invalid authentication, `404` for an unknown group, and `403` for callers
 without the required role in that group. Responses use `Cache-Control: no-store`.

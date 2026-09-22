@@ -9,7 +9,7 @@ function fixture(t) {
   t.after(() => db.destroy());
   const state = { role: "OWNER", group: 1, inserts: [], insertError: null, authError: null };
   state.cycle = { id: "20", group_id: 1, interest_rate: "2.500000", interest_period: "MONTHLY",
-    interest_method: "COMPOUND", cost_per_share: "100.00", status: "inactive",
+    interest_method: "COMPOUND", cost_per_share: "100.00", status: "draft",
     created_at: "2026-09-20T00:00:00.000Z", updated_at: "2026-09-20T00:00:00.000Z" };
   state.updates = [];
   state.cycleReads = 0;
@@ -73,10 +73,10 @@ test("cycle creation permits group OWNER/ADMIN on both paths and returns saved f
   for (const role of ["OWNER", "ADMIN"]) {
     state.role = role;
     for (const path of ["/cycles", "/api/v1/cycles"]) {
-      const result = await post({ ...terms, status: "active" }, { path });
+      const result = await post({ ...terms, status: "draft" }, { path });
       assert.equal(result.status, 201);
       assert.equal(result.headers["cache-control"], "no-store");
-      assert.deepEqual(result.body, { success: true, cycle: { id: 20, ...terms, status: "active", group_id: 1,
+      assert.deepEqual(result.body, { success: true, cycle: { id: 20, ...terms, status: "draft", group_id: 1,
         created_at: "2026-09-20T00:00:00.000Z", updated_at: "2026-09-20T00:00:00.000Z" } });
     }
   }
@@ -87,7 +87,7 @@ test("cycle creation permits group OWNER/ADMIN on both paths and returns saved f
 test("cycles support nullable financial settings, allowed enums, statuses and exact decimal limits", async t => {
   const { post } = fixture(t);
   assert.deepEqual((await post()).body.cycle, { id: 20, group_id: 1, interest_rate: null,
-    interest_period: null, interest_method: null, cost_per_share: null, status: "inactive",
+    interest_period: null, interest_method: null, cost_per_share: null, status: "draft",
     created_at: "2026-09-20T00:00:00.000Z", updated_at: "2026-09-20T00:00:00.000Z" });
   assert.equal((await post({ interest_rate: null, interest_period: null, interest_method: null, cost_per_share: null })).status, 201);
   for (const interest_period of ["DAILY", "WEEKLY", "MONTHLY", "YEARLY"]) {
@@ -95,7 +95,10 @@ test("cycles support nullable financial settings, allowed enums, statuses and ex
       assert.equal((await post({ ...terms, interest_rate: 0, interest_period, interest_method })).status, 201);
     }
   }
-  for (const status of ["active", "inactive", "distributing"]) assert.equal((await post({ status })).status, 201);
+  assert.equal((await post({ status: "draft" })).status, 201);
+  for (const status of ["active", "distributing", "closed", "inactive"]) {
+    assert.equal((await post({ status })).status, 400);
+  }
   for (const interest_rate of ["999.999999", "0.000001", 2.5]) {
     assert.equal((await post({ ...terms, interest_rate })).status, 201);
   }
@@ -144,12 +147,12 @@ test("cycle input enforces database constraints and rejects protected or unknown
   assert.equal(state.inserts.length, 0);
 });
 
-test("cycle creation reports active-cycle conflicts without exposing internal failures", async t => {
+test("cycle creation reports current-cycle conflicts without exposing internal failures", async t => {
   const { state, post } = fixture(t);
-  state.insertError = Object.assign(new Error("Private constraint details"), { code: "23505", constraint: "cycles_one_active_per_group" });
-  const conflict = await post({ status: "active" });
+  state.insertError = Object.assign(new Error("Private constraint details"), { code: "23505", constraint: "cycles_one_current_per_group" });
+  const conflict = await post({ status: "draft" });
   assert.equal(conflict.status, 409);
-  assert.deepEqual(conflict.body, { success: false, error: "This group already has an active cycle" });
+  assert.deepEqual(conflict.body, { success: false, error: "This group already has a current cycle" });
   for (const error of [new Error("Private database details"), Object.assign(new Error("Other unique constraint"), { code: "23505", constraint: "cycles_pkey" })]) {
     state.insertError = error;
     const result = await post();
@@ -158,7 +161,7 @@ test("cycle creation reports active-cycle conflicts without exposing internal fa
   }
 });
 
-test("OWNER/ADMIN can partially update inactive cycles on both paths without resetting omitted fields", async t => {
+test("OWNER/ADMIN can partially update draft cycles on both paths without resetting omitted fields", async t => {
   const { state, patch } = fixture(t);
   for (const role of ["OWNER", "ADMIN"]) {
     state.role = role;
@@ -183,14 +186,14 @@ test("OWNER/ADMIN can partially update inactive cycles on both paths without res
 
 test("cycle updates enforce every transition and allow status-only retries without a write", async t => {
   const { state, patch } = fixture(t);
-  const allowed = { inactive: "active", active: "distributing" };
-  for (const from of ["inactive", "active", "distributing"]) {
-    for (const to of ["inactive", "active", "distributing"]) {
+  const allowed = { draft: "active", active: "distributing", distributing: "closed" };
+  for (const from of ["draft", "active", "distributing", "closed"]) {
+    for (const to of ["draft", "active", "distributing", "closed"]) {
       state.cycle.status = from;
       const before = { ...state.cycle };
       const count = state.updates.length;
       const result = await patch({ status: to });
-      assert.equal(result.status, from === to || allowed[from] === to ? 200 : 409, `${from} -> ${to}`);
+      assert.equal(result.status, from !== "closed" && (from === to || allowed[from] === to) ? 200 : 409, `${from} -> ${to}`);
       if (allowed[from] === to) {
         assert.equal(state.cycle.status, to);
         assert.deepEqual(state.updates.at(-1), { status: to });
@@ -202,16 +205,16 @@ test("cycle updates enforce every transition and allow status-only retries witho
   }
 });
 
-test("financial fields cannot be supplied on active or distributing cycles, even during transition", async t => {
+test("financial fields cannot be supplied on active, distributing, or closed cycles, even during transition", async t => {
   const { state, patch } = fixture(t);
-  for (const status of ["active", "distributing"]) {
+  for (const status of ["active", "distributing", "closed"]) {
     state.cycle.status = status;
     for (const body of [{ interest_rate: null }, { cost_per_share: -1 }, { interest_period: "invalid" }]) {
       assert.equal((await patch(body)).status, 409);
     }
     for (const field of Object.keys(terms)) {
       for (const body of [{ [field]: terms[field] }, { [field]: terms[field], status: "distributing" },
-        { [field]: terms[field], status: "inactive" }]) {
+        { [field]: terms[field], status: "draft" }]) {
         assert.equal((await patch(body)).status, 409);
       }
     }
@@ -249,7 +252,7 @@ test("cycle updates validate IDs, request shape, protected fields and merged fin
   assert.equal(state.cycleReads, 0);
   for (const body of [{}, null, [], { group_id: 2 }, { id: "21" }, { created_at: "today" },
     { updated_at: "today" }, { role: "OWNER" }, { name: "x" }, { status: "ACTIVE" },
-    { status: "DISTRBUTING" }, { status: null }, { status: "ended" },
+    { status: "DISTRBUTING" }, { status: "inactive" }, { status: null }, { status: "ended" },
     { interest_rate: null }, { interest_method: null }, { interest_period: null },
     { interest_rate: -1 }, { interest_rate: "1000" }, { interest_rate: "0.0000001" },
     { interest_period: "monthly" }, { interest_method: "FLAT" }, { cost_per_share: 0 },
@@ -267,13 +270,13 @@ test("cycle updates validate IDs, request shape, protected fields and merged fin
   assert.equal((await patch({ cost_per_share: "0.01" }, { path: `/cycles/${state.cycle.id}` })).status, 200);
 });
 
-test("cycle updates report active conflicts and hide unexpected database errors", async t => {
+test("cycle updates report current-cycle conflicts and hide unexpected database errors", async t => {
   const { state, patch } = fixture(t);
   const before = { ...state.cycle };
-  state.updateError = Object.assign(new Error("Private details"), { code: "23505", constraint: "cycles_one_active_per_group" });
+  state.updateError = Object.assign(new Error("Private details"), { code: "23505", constraint: "cycles_one_current_per_group" });
   const result = await patch({ status: "active", cost_per_share: "200" });
   assert.equal(result.status, 409);
-  assert.deepEqual(result.body, { success: false, error: "This group already has an active cycle" });
+  assert.deepEqual(result.body, { success: false, error: "This group already has a current cycle" });
   assert.deepEqual(state.cycle, before);
   state.updateError = new Error("Private database details");
   assert.deepEqual((await patch({ cost_per_share: "200" })).body, { success: false, error: "Internal server error" });

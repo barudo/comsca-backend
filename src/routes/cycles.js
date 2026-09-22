@@ -12,8 +12,8 @@ function cycleInput(body, current) {
   if (Object.keys(body).some(key => !allowed.includes(key))) fail("Unsupported cycle field");
   if (current) {
     if (!Object.keys(body).length) fail("At least one cycle field is required");
-    if (current.status !== "inactive" && Object.keys(body).some(key => key !== "status")) {
-      fail("Financial settings can only be updated on an inactive cycle", 409);
+    if (current.status !== "draft" && Object.keys(body).some(key => key !== "status")) {
+      fail("Financial settings can only be updated on a draft cycle", 409);
     }
     body = { ...Object.fromEntries(allowed.map(key => [key, current[key]])), ...body };
   }
@@ -42,10 +42,10 @@ function cycleInput(body, current) {
     interest_period: body.interest_period ?? null,
     interest_method: body.interest_method ?? null,
     cost_per_share: decimal("cost_per_share", 18, 2, true),
-    status: body.status === undefined ? "inactive" : body.status,
+    status: body.status === undefined ? "draft" : body.status,
   };
-  if (!["active", "inactive", "distributing"].includes(values.status)) {
-    fail("status must be active, inactive, or distributing");
+  if (!["draft", "active", "distributing", "closed"].includes(values.status)) {
+    fail("status must be draft, active, distributing, or closed");
   }
   if (values.interest_period !== null && !["DAILY", "WEEKLY", "MONTHLY", "YEARLY"].includes(values.interest_period)) {
     fail("interest_period must be DAILY, WEEKLY, MONTHLY, or YEARLY");
@@ -71,14 +71,17 @@ router.post("/", authenticate, async (request, response, next) => {
         throw Object.assign(new Error("Only an OWNER or ADMIN of this group can create cycles"), { status: 403 });
       }
       const values = cycleInput(request.body);
+      if (values.status !== "draft") {
+        throw Object.assign(new Error("New cycles must start in draft status"), { status: 400 });
+      }
       const [created] = await trx("cycles").insert({ ...values, group_id: request.group.id })
         .returning(cycleColumns);
       return created;
     });
     return response.status(201).json({ success: true, cycle });
   } catch (error) {
-    if (error.code === "23505" && error.constraint === "cycles_one_active_per_group") {
-      return response.status(409).json({ success: false, error: "This group already has an active cycle" });
+    if (error.code === "23505" && error.constraint === "cycles_one_current_per_group") {
+      return response.status(409).json({ success: false, error: "This group already has a current cycle" });
     }
     if ([400, 403].includes(error.status)) {
       return response.status(error.status).json({ success: false, error: error.message });
@@ -106,9 +109,12 @@ router.patch("/:id", authenticate, async (request, response, next) => {
       if (!current) {
         throw Object.assign(new Error("Cycle not found in this group"), { status: 404 });
       }
+      if (current.status === "closed") {
+        throw Object.assign(new Error("Closed cycles are read-only"), { status: 409 });
+      }
       const values = cycleInput(request.body, current);
       const hasFinancialFields = Object.keys(request.body).some(key => key !== "status");
-      const nextStatus = { inactive: "active", active: "distributing" }[current.status];
+      const nextStatus = { draft: "active", active: "distributing", distributing: "closed" }[current.status];
       if (values.status !== current.status && values.status !== nextStatus) {
         throw Object.assign(new Error("Invalid cycle status transition"), { status: 409 });
       }
@@ -120,8 +126,8 @@ router.patch("/:id", authenticate, async (request, response, next) => {
     });
     return response.json({ success: true, cycle });
   } catch (error) {
-    if (error.code === "23505" && error.constraint === "cycles_one_active_per_group") {
-      return response.status(409).json({ success: false, error: "This group already has an active cycle" });
+    if (error.code === "23505" && error.constraint === "cycles_one_current_per_group") {
+      return response.status(409).json({ success: false, error: "This group already has a current cycle" });
     }
     if ([400, 403, 404, 409].includes(error.status)) {
       return response.status(error.status).json({ success: false, error: error.message });

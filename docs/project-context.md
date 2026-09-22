@@ -27,6 +27,10 @@ is an orientation, not a completed BMAD planning artifact.
   queries switch to restricted roles with transaction-local group context.
 - `GET /groups/users` and its `/api/v1` alias require OWNER or ADMIN, return only
   the selected group's users, and include current-cycle membership information.
+- Cycle lifecycle is draft -> active -> distributing -> closed. Migration 012
+  allows only one non-closed cycle per group; this is the current cycle even if
+  a historical row has a newer creation date. Creation starts in draft, financial
+  edits are draft-only, and closed cycles cannot be updated through the API.
 - Never return password hashes or privileged Auth credentials in API responses.
 
 ## Development and verification

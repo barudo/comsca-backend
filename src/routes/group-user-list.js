@@ -16,7 +16,7 @@ router.get("/users", authenticate, async (request, response, next) => {
       await trx.raw("SET LOCAL ROLE comsca_group_reader");
       await trx.raw("SELECT set_config('app.group_id', ?, true)", [String(request.group.id)]);
       const cycle = await trx("cycles").where({ group_id: request.group.id })
-        .orderBy("created_at", "desc").orderBy("id", "desc").first("id");
+        .where("status", "<>", "closed").first("id");
       const users = await trx("users as u")
         .leftJoin("cycle_members as cm", function () {
           this.on("cm.user_id", "=", "u.id").andOnVal("cm.cycle_id", "=", cycle?.id ?? null);
