@@ -7,9 +7,10 @@ is an orientation, not a completed BMAD planning artifact.
 ## Stack and layout
 
 - CommonJS JavaScript, Express 5, Knex, PostgreSQL, and Supabase Auth.
-- `src/app.js` wires routes and middleware; `src/server.js` runs locally.
+- `src/app.js` wires application middleware and the route registry; `src/server.js` runs locally.
 - `src/handler.js` adapts Express to AWS Lambda via `serverless-http`.
-- `src/routes/` and `src/api/v1/` contain HTTP handlers.
+- `src/routes/index.js` explicitly registers all HTTP routes, aliases, and their middleware.
+- `src/handlers/` contains request handler classes; bind instance methods when registering routes.
 - `migrations/` contains ordered schema and security changes.
 - `test/` uses Node's built-in test runner and includes request and optional
   PostgreSQL integration tests.

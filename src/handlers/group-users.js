@@ -1,7 +1,3 @@
-const express = require("express");
-const authenticate = require("../middleware/authenticate");
-const router = express.Router();
-
 function memberInput(body) {
   const fail = (message) => { throw Object.assign(new Error(message), { status: 400 }); };
   if (!body || typeof body !== "object" || Array.isArray(body)) fail("A user object is required");
@@ -31,31 +27,33 @@ function memberInput(body) {
   return user;
 }
 
-router.post("/", authenticate, async (request, response, next) => {
-  try {
-    const user = await request.app.locals.database.transaction(async (trx) => {
-      // Lock the actor so role revocation or group reassignment cannot race this write.
-      const actor = await trx("users").where({
-        auth_user_id: request.authUser.id, group_id: request.group.id,
-      }).forUpdate().first("id", "role");
-      if (!actor || !["OWNER", "ADMIN"].includes(actor.role)) {
-        throw Object.assign(new Error("Only an OWNER or ADMIN of this group can add users"), { status: 403 });
+class GroupUsersHandler {
+  async create(request, response, next) {
+    try {
+      const user = await request.app.locals.database.transaction(async (trx) => {
+        // Lock the actor so role revocation or group reassignment cannot race this write.
+        const actor = await trx("users").where({
+          auth_user_id: request.authUser.id, group_id: request.group.id,
+        }).forUpdate().first("id", "role");
+        if (!actor || !["OWNER", "ADMIN"].includes(actor.role)) {
+          throw Object.assign(new Error("Only an OWNER or ADMIN of this group can add users"), { status: 403 });
+        }
+        const values = memberInput(request.body);
+        const [created] = await trx("users").insert({ ...values, group_id: request.group.id })
+          .returning(["id", "group_id", "first_name", "family_name", "username", "email", "phone", "address", "role", "created_at"]);
+        return created;
+      });
+      return response.status(201).json({ success: true, user });
+    } catch (error) {
+      if (error.code === "23505") {
+        return response.status(409).json({ success: false, error: "User already exists in this group" });
       }
-      const values = memberInput(request.body);
-      const [created] = await trx("users").insert({ ...values, group_id: request.group.id })
-        .returning(["id", "group_id", "first_name", "family_name", "username", "email", "phone", "address", "role", "created_at"]);
-      return created;
-    });
-    return response.status(201).json({ success: true, user });
-  } catch (error) {
-    if (error.code === "23505") {
-      return response.status(409).json({ success: false, error: "User already exists in this group" });
+      if ([400, 403].includes(error.status)) {
+        return response.status(error.status).json({ success: false, error: error.message });
+      }
+      return next(error);
     }
-    if ([400, 403].includes(error.status)) {
-      return response.status(error.status).json({ success: false, error: error.message });
-    }
-    return next(error);
   }
-});
+}
 
-module.exports = router;
+module.exports = GroupUsersHandler;

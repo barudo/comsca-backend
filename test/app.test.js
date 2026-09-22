@@ -98,7 +98,7 @@ test("GET / returns the welcome response for a known group slug", async () => {
   });
 });
 
-test("POST /api/v1/auth/login is loaded from the auth route file", async () => {
+test("POST /api/v1/auth/login reaches the legacy auth handler", async () => {
   const result = await request(createTestApp(), "/api/v1/auth/login", {
     method: "POST",
     headers: { "x-group-slug": "comsca" },

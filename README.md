@@ -39,6 +39,20 @@ npm start
 
 The endpoint is available at `http://localhost:3000/`.
 
+## Routing and handlers
+
+All endpoints are registered explicitly in `src/routes/index.js`, which is mounted
+once by `src/app.js`. Add routes and their aliases there; route files are not
+automatically discovered. Request logic lives in classes under `src/handlers/`
+(for example, `CyclesHandler.list`, `.create`, and `.update`). Bind handler methods
+to their instances when registering them, and keep request-specific state local
+to each method. Database and service dependencies come from `request.app.locals`.
+
+The registry puts raw webhook parsing before JSON parsing, public registration
+and Supabase authentication before group resolution, and group-scoped endpoints
+after it. The legacy username login and auth index still require a group header.
+Existing `/api/v1` paths and short aliases use the same handler methods.
+
 ## Database migrations
 
 The project uses Knex migrations with PostgreSQL. Copy `.env.example` to `.env`

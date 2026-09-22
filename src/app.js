@@ -1,7 +1,6 @@
 const express = require("express");
 const db = require("./db");
-const loadRoutes = require("./api");
-const groupSlugMiddleware = require("./middleware/group-slug");
+const createRouter = require("./routes");
 
 function createApp(database = db, services = {}) {
   const app = express();
@@ -9,28 +8,7 @@ function createApp(database = db, services = {}) {
   app.locals.services = services;
   app.use(require("./middleware/cors"));
 
-  // Verify Supabase signatures against the original bytes, before JSON parsing.
-  app.use("/api/v1/hooks", express.raw({ type: "application/json", limit: "32kb" }), require("./api/v1/hooks"));
-  app.use(express.json({ limit: "32kb" }));
-  // A new group does not exist yet, so registration cannot require its header.
-  app.use("/api/v1/user", require("./api/v1/user"));
-  app.use(["/groups", "/api/v1/groups"], require("./api/v1/groups"));
-  app.use("/api/v1/auth", require("./routes/supabase-auth"));
-  app.use(groupSlugMiddleware(database));
-  app.use(["/groups", "/api/v1/groups"], require("./routes/group-user-list"));
-  app.use(["/groups/users", "/api/v1/groups/users"], require("./routes/group-user-accounts"));
-  app.use(["/user", "/api/v1/user", "/groups/users", "/api/v1/groups/users"], require("./routes/group-users"));
-  app.use(["/users", "/api/v1/users"], require("./routes/users"));
-  app.use(["/cycles", "/api/v1/cycles"], require("./routes/cycles"));
-
-  app.get("/", (_request, response) => {
-    response.json({
-      success: true,
-      message: "On this site will rise the awesome",
-    });
-  });
-
-  loadRoutes(app, `${__dirname}/api`, "/api");
+  app.use(createRouter(database));
 
   app.use((error, _request, response, _next) => {
     if (error.type === "entity.parse.failed") {
