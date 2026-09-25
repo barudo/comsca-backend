@@ -31,17 +31,19 @@ function fixture(t) {
       return {};
     }
     if (state.dbError) throw state.dbError;
-    assert.match(query.sql, /from "cycles" where "group_id" = \? order by "created_at" desc, "id" desc$/);
-    assert.deepEqual(query.bindings, ["1"]);
+    assert.match(query.sql, /from "cycles" where "group_id" = \? and "status" in \(\?, \?, \?\) order by "created_at" desc, "id" desc limit \?$/);
+    assert.deepEqual(query.bindings, ["1", "draft", "distributing", "active", 1]);
     for (const column of Object.keys(cycle)) assert.ok(query.sql.includes(`"${column}"`), column);
     assert.doesNotMatch(query.sql, /select \*/);
-    return state.cycles;
+    return state.cycles.filter(cycle => cycle.group_id === "1" && ["draft", "distributing", "active"].includes(cycle.status))
+      .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || (BigInt(a.id) < BigInt(b.id) ? 1 : -1))
+      .slice(0, 1);
   } });
   const handler = serverless(createApp(db, { getUser: async () => {
     if (state.authError) throw state.authError;
     return { id: authId, user_metadata: { role: "OWNER", group_id: "2" } };
   } }));
-  const get = async (path = "/cycles", headers = {}) => {
+  const get = async (path = "/api/v1/cycles", headers = {}) => {
     const result = await handler({ version: "2.0", rawPath: path,
       rawQueryString: "group_id=2&status=active&current_cycle_id=999",
       headers: { authorization: "Bearer verified-token", "x-group-slug": "alpha", ...headers },
@@ -51,7 +53,7 @@ function fixture(t) {
   return { state, get };
 }
 
-test("GET cycle aliases list group history and the actual current cycle for OWNER/ADMIN", async t => {
+test("GET cycles returns only the latest qualifying cycle for OWNER/ADMIN", async t => {
   const { state, get } = fixture(t);
   for (const role of ["OWNER", "ADMIN"]) {
     state.role = role;
@@ -61,12 +63,12 @@ test("GET cycle aliases list group history and the actual current cycle for OWNE
         const result = await get(path);
         assert.equal(result.status, 200);
         assert.equal(result.headers["cache-control"], "no-store");
-        assert.deepEqual(result.body, { success: true, current_cycle_id: "20", cycles: state.cycles });
+        assert.deepEqual(result.body, { success: true, current_cycle_id: "20", cycles: [state.cycles[1]] });
       }
     }
   }
   state.cycles[1].status = "closed";
-  assert.equal((await get()).body.current_cycle_id, null);
+  assert.deepEqual((await get()).body, { success: true, current_cycle_id: null, cycles: [] });
   state.cycles = [];
   assert.deepEqual((await get()).body, { success: true, current_cycle_id: null, cycles: [] });
   const sql = state.queries.map(query => query.sql);
@@ -96,4 +98,19 @@ test("GET cycles hides database failure details", async t => {
   const result = await get();
   assert.equal(result.status, 500);
   assert.deepEqual(result.body, { success: false, error: "Internal server error" });
+});
+
+
+test("GET cycles filters before selecting the latest and breaks timestamp ties by ID", async t => {
+  const { state, get } = fixture(t);
+  const base = state.cycles[1];
+  state.cycles = [
+    { ...base, id: "100", status: "closed", created_at: "2026-09-25T00:00:00Z" },
+    { ...base, id: "99", created_at: "2026-09-19T00:00:00Z" },
+    { ...base, id: "9", status: "active" },
+    { ...base, id: "10", status: "distributing" },
+    { ...base, id: "101", group_id: "2", created_at: "2026-09-26T00:00:00Z" },
+  ];
+  const result = await get();
+  assert.deepEqual(result.body, { success: true, current_cycle_id: "10", cycles: [state.cycles[3]] });
 });

@@ -83,9 +83,9 @@ New cycles start as drafts; another draft cannot be created until the current
 cycle is closed. See [cycle lifecycle deployment](docs/cycle-lifecycle.md) for
 migration conversion, preflight checks, API compatibility changes, and rollback.
 
-## List cycles
+## Get the latest current cycle
 
-`GET /cycles` (also `GET /api/v1/cycles`) requires a Bearer token and an
+`GET /api/v1/cycles` requires a Bearer token and an
 OWNER/ADMIN database profile in the group selected by `x-group-slug`.
 Apply migration `013_allow_cycle_list_columns.js` before deploying this endpoint;
 it grants the existing RLS reader access to the cycle's financial columns and
@@ -98,12 +98,14 @@ x-group-slug: your-group
 ```
 
 Returns HTTP 200 with `{ "success": true, "current_cycle_id": "7", "cycles": [...] }`.
-The list includes current and closed cycles ordered by `created_at DESC, id DESC`.
+The `cycles` array contains at most one cycle: the latest with status `draft`,
+`distributing`, or `active`, ordered by `created_at DESC, id DESC`. Closed cycles
+are excluded before selecting the latest result.
 Each cycle includes `id`, `group_id`, `interest_rate`, `interest_period`,
 `interest_method`, `cost_per_share`, `status`, `created_at`, and `updated_at`.
-Decimals retain PostgreSQL's string representation. The current ID is the sole
-non-closed cycle's ID, regardless of position in the list, or null when none
-exists. An empty group returns `cycles: []` and `current_cycle_id: null`.
+Decimals retain PostgreSQL's string representation. The current ID is the returned
+cycle's ID. When no matching cycle exists (including groups with only closed
+cycles), the response contains `cycles: []` and `current_cycle_id: null`.
 
 Missing group header returns 400, missing/invalid authentication 401, callers
 without OWNER/ADMIN membership in that group 403, and an unknown group 404.
@@ -113,12 +115,14 @@ transaction-local group context. No request body is needed.
 
 ## Create a cycle
 
-`POST /cycles` (also `/api/v1/cycles`) requires a Bearer token and an OWNER or
+API convention: use `/api/v1/` for all new endpoints; do not add unversioned aliases.
+
+`POST /api/v1/cycles` requires a Bearer token and an OWNER or
 ADMIN database profile in the group selected by `x-group-slug`.
 Apply migrations through `015_add_cycle_absence_penalty.js` before deploying this version.
 
 ```http
-POST /cycles
+POST /api/v1/cycles
 Authorization: Bearer <access-token>
 x-group-slug: your-group
 Content-Type: application/json

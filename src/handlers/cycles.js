@@ -87,9 +87,10 @@ class CyclesHandler {
         await trx.raw("SET LOCAL ROLE comsca_group_reader");
         await trx.raw("SELECT set_config('app.group_id', ?, true)", [String(request.group.id)]);
         return trx("cycles").where({ group_id: request.group.id }).select(cycleColumns)
-          .orderBy("created_at", "desc").orderBy("id", "desc");
+          .whereIn("status", ["draft", "distributing", "active"])
+          .orderBy("created_at", "desc").orderBy("id", "desc").limit(1);
       });
-      const current = cycles.find(cycle => cycle.status !== "closed");
+      const current = cycles[0];
       return response.json({ success: true, current_cycle_id: current?.id ?? null, cycles });
     } catch (error) {
       return next(error);
