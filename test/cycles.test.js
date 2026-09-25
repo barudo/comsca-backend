@@ -47,7 +47,8 @@ function fixture(t) {
     const values = builder._single.insert;
     state.inserts.push(values);
     assert.deepEqual(query.returning, ["id", "group_id", "interest_rate", "interest_period", "interest_method",
-      "cost_per_share", "status", "created_at", "updated_at"]);
+      "cost_per_share", "status", "created_at", "updated_at",
+      "name", "description", "absence_penalty", "required_monthly_contribution"]);
     return [{ id: 20, ...values, created_at: "2026-09-20T00:00:00.000Z", updated_at: "2026-09-20T00:00:00.000Z" }];
   } });
   const handler = serverless(createApp(db, { getUser: async () => {
@@ -66,6 +67,8 @@ function fixture(t) {
     patch: (body, options) => send("PATCH", body, options) };
 }
 
+const emptyCreationFields = { name: null, description: null, absence_penalty: null, required_monthly_contribution: null };
+
 const terms = { interest_rate: "2.500000", interest_period: "MONTHLY", interest_method: "COMPOUND", cost_per_share: "100.00" };
 
 test("cycle creation permits group OWNER/ADMIN on both paths and returns saved fields", async t => {
@@ -76,7 +79,7 @@ test("cycle creation permits group OWNER/ADMIN on both paths and returns saved f
       const result = await post({ ...terms, status: "draft" }, { path });
       assert.equal(result.status, 201);
       assert.equal(result.headers["cache-control"], "no-store");
-      assert.deepEqual(result.body, { success: true, cycle: { id: 20, ...terms, status: "draft", group_id: 1,
+      assert.deepEqual(result.body, { success: true, cycle: { id: 20, ...emptyCreationFields, ...terms, status: "draft", group_id: 1,
         created_at: "2026-09-20T00:00:00.000Z", updated_at: "2026-09-20T00:00:00.000Z" } });
     }
   }
@@ -86,7 +89,7 @@ test("cycle creation permits group OWNER/ADMIN on both paths and returns saved f
 
 test("cycles support nullable financial settings, allowed enums, statuses and exact decimal limits", async t => {
   const { post } = fixture(t);
-  assert.deepEqual((await post()).body.cycle, { id: 20, group_id: 1, interest_rate: null,
+  assert.deepEqual((await post()).body.cycle, { id: 20, ...emptyCreationFields, group_id: 1, interest_rate: null,
     interest_period: null, interest_method: null, cost_per_share: null, status: "draft",
     created_at: "2026-09-20T00:00:00.000Z", updated_at: "2026-09-20T00:00:00.000Z" });
   assert.equal((await post({ interest_rate: null, interest_period: null, interest_method: null, cost_per_share: null })).status, 201);
@@ -129,7 +132,7 @@ test("cycles reject unauthenticated, cross-group and non-manager requests withou
 test("cycle input enforces database constraints and rejects protected or unknown fields", async t => {
   const { state, post } = fixture(t);
   for (const body of [null, [], "cycle", { group_id: 2 }, { id: 20 }, { created_at: "2026-09-20" },
-    { updated_at: "2026-09-20" }, { name: "Cycle" }, { status: null }, { status: "ACTIVE" },
+    { updated_at: "2026-09-20" }, { unknown_field: "Cycle" }, { status: null }, { status: "ACTIVE" },
     { status: "ended" }, { status: [] }, { interest_rate: 2 }, { interest_period: "MONTHLY" },
     { interest_method: "SIMPLE" }, { ...terms, interest_method: null }, { ...terms, interest_rate: null },
     { ...terms, interest_period: null }, { ...terms, interest_period: "monthly" },
@@ -280,4 +283,44 @@ test("cycle updates report current-cycle conflicts and hide unexpected database 
   assert.deepEqual(state.cycle, before);
   state.updateError = new Error("Private database details");
   assert.deepEqual((await patch({ cost_per_share: "200" })).body, { success: false, error: "Internal server error" });
+});
+
+
+test("creation saves and returns descriptive and currency fields on both aliases", async t => {
+  const { state, post } = fixture(t);
+  const fields = { name: "Cycle 2026", description: "Monthly savings", absence_penalty: "0.00",
+    required_monthly_contribution: "9999999999999999.99" };
+  for (const path of ["/cycles", "/api/v1/cycles"]) {
+    const result = await post(fields, { path });
+    assert.equal(result.status, 201);
+    for (const [key, value] of Object.entries(fields)) {
+      assert.equal(result.body.cycle[key], value);
+      assert.equal(state.inserts.at(-1)[key], value);
+    }
+  }
+  assert.equal((await post(emptyCreationFields)).status, 201);
+  assert.equal((await post({ name: "😀".repeat(255), description: "x".repeat(1000) })).status, 201);
+  for (const field of ["absence_penalty", "required_monthly_contribution"]) {
+    for (const value of [0, 10.5, "0.01", null]) {
+      const result = await post({ [field]: value });
+      assert.equal(result.status, 201);
+      assert.equal(result.body.cycle[field], value === null ? null : String(value));
+    }
+  }
+});
+
+test("creation rejects invalid descriptive and currency fields before inserting", async t => {
+  const { state, post } = fixture(t);
+  for (const field of ["name", "description"]) {
+    for (const value of [1, true, [], {}, "bad\u0000text"]) {
+      assert.equal((await post({ [field]: value })).status, 400);
+    }
+  }
+  assert.equal((await post({ name: "😀".repeat(256) })).status, 400);
+  for (const field of ["absence_penalty", "required_monthly_contribution"]) {
+    for (const value of [-1, "-0.01", "0.001", "10000000000000000", "NaN", "Infinity", "1e2", "", true, {}, [], 9007199254740992]) {
+      assert.equal((await post({ [field]: value })).status, 400, `${field}: ${JSON.stringify(value)}`);
+    }
+  }
+  assert.equal(state.inserts.length, 0);
 });

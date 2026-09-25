@@ -1,10 +1,13 @@
 const cycleColumns = ["id", "group_id", "interest_rate", "interest_period", "interest_method",
   "cost_per_share", "status", "created_at", "updated_at"];
+const creationFields = ["name", "description", "absence_penalty", "required_monthly_contribution"];
+const creationColumns = [...cycleColumns, ...creationFields];
 
 function cycleInput(body, current) {
   const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
   if (!body || typeof body !== "object" || Array.isArray(body)) fail("A cycle object is required");
   const allowed = ["interest_rate", "interest_period", "interest_method", "cost_per_share", "status"];
+  if (!current) allowed.push(...creationFields);
   if (Object.keys(body).some(key => !allowed.includes(key))) fail("Unsupported cycle field");
   if (current) {
     if (!Object.keys(body).length) fail("At least one cycle field is required");
@@ -40,6 +43,20 @@ function cycleInput(body, current) {
     cost_per_share: decimal("cost_per_share", 18, 2, true),
     status: body.status === undefined ? "draft" : body.status,
   };
+  if (!current) {
+    for (const field of ["name", "description"]) {
+      const value = body[field] ?? null;
+      if (value !== null && (typeof value !== "string" || value.includes("\u0000"))) {
+        fail(`${field} must be a string without null characters`);
+      }
+      if (field === "name" && value !== null && [...value].length > 255) {
+        fail("name must be at most 255 characters");
+      }
+      values[field] = value;
+    }
+    values.absence_penalty = decimal("absence_penalty", 18, 2, false);
+    values.required_monthly_contribution = decimal("required_monthly_contribution", 18, 2, false);
+  }
   if (!["draft", "active", "distributing", "closed"].includes(values.status)) {
     fail("status must be draft, active, distributing, or closed");
   }
@@ -94,7 +111,7 @@ class CyclesHandler {
           throw Object.assign(new Error("New cycles must start in draft status"), { status: 400 });
         }
         const [created] = await trx("cycles").insert({ ...values, group_id: request.group.id })
-          .returning(cycleColumns);
+          .returning(creationColumns);
         return created;
       });
       return response.status(201).json({ success: true, cycle });

@@ -115,7 +115,7 @@ transaction-local group context. No request body is needed.
 
 `POST /cycles` (also `/api/v1/cycles`) requires a Bearer token and an OWNER or
 ADMIN database profile in the group selected by `x-group-slug`.
-Apply migration `012_current_cycle_lifecycle.js` before deploying this version.
+Apply migrations through `015_add_cycle_absence_penalty.js` before deploying this version.
 
 ```http
 POST /cycles
@@ -124,6 +124,10 @@ x-group-slug: your-group
 Content-Type: application/json
 
 {
+  "name": "2026 Savings Cycle",
+  "description": "Monthly group savings",
+  "absence_penalty": "50.00",
+  "required_monthly_contribution": "500.00",
   "interest_rate": "2.500000",
   "interest_period": "MONTHLY",
   "interest_method": "COMPOUND",
@@ -132,6 +136,11 @@ Content-Type: application/json
 }
 ```
 
+- `name`: optional/null string, at most 255 characters.
+- `description`: optional/null text string. Neither text field accepts NUL characters.
+- `absence_penalty` and `required_monthly_contribution`: optional/null,
+  nonnegative currency amounts with at most 16 integer digits and 2 decimal
+  places (`numeric(18,2)`). Zero is valid.
 - `interest_rate`: nonnegative decimal, at most 3 integer digits and 6 decimal
   places (`numeric(9,6)`). Zero is valid.
 - `interest_period`: `DAILY`, `WEEKLY`, `MONTHLY`, or `YEARLY`.
@@ -151,7 +160,9 @@ The group comes from the header; client-supplied `group_id`, IDs, timestamps,
 and other unsupported fields are rejected.
 
 Success returns HTTP 201 with `{ "success": true, "cycle": { ... } }`, including
-the saved ID, group ID, financial settings, status, and timestamps. Invalid input
+the saved ID, group ID, name, description, financial settings (including the two
+new currency fields), status, and timestamps. These new fields are supported by
+creation; list and update endpoints retain their existing fields. Invalid input
 returns 400, missing/invalid authentication 401, missing group membership or an
 unauthorized role 403, unknown group 404, and an existing non-closed cycle in the
 same group 409. `current_cycle_id` in the group-user listing identifies the sole
