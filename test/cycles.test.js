@@ -56,7 +56,7 @@ function fixture(t) {
     return { id: authId, user_metadata: { role: "OWNER", group_id: 2 } };
   } }));
   const send = async (method, body = {}, options = {}) => {
-    const response = await handler({ version: "2.0", rawPath: options.path || (method === "PATCH" ? "/api/v1/cycles/20" : "/api/v1/cycles"),
+    const response = await handler({ version: "2.0", rawPath: options.path || (method === "POST" ? "/api/v1/cycles" : "/api/v1/cycles/20"),
       rawQueryString: "group_id=2", headers: { "content-type": "application/json",
         authorization: "Bearer verified-token", "x-group-slug": "alpha", ...options.headers },
       requestContext: { http: { method, sourceIp: "127.0.0.1" } },
@@ -66,6 +66,7 @@ function fixture(t) {
     return { status: response.statusCode, body: responseBody, headers: response.headers };
   };
   return { state, post: (body, options) => send("POST", body, options),
+    put: (body, options) => send("PUT", body, options),
     patch: (body, options) => send("PATCH", body, options) };
 }
 
@@ -332,4 +333,26 @@ test("the removed POST /cycles alias does not create a cycle", async t => {
   const { state, post } = fixture(t);
   assert.equal((await post(terms, { path: "/cycles" })).status, 404);
   assert.equal(state.inserts.length, 0);
+});
+
+test("PUT updates cycle status with existing transition and authorization rules", async t => {
+  const { state, put } = fixture(t);
+  assert.equal((await put({ status: "active" }, { headers: { authorization: "" } })).status, 401);
+  assert.equal((await put({ status: "active" }, { headers: { "x-group-slug": "beta" } })).status, 403);
+  state.role = "MEMBER";
+  assert.equal((await put({ status: "active" })).status, 403);
+  state.role = "ADMIN";
+  assert.equal((await put({ status: "active" }, { path: "/api/v1/cycles/invalid" })).status, 400);
+  assert.equal((await put({ status: "active" }, { path: "/api/v1/cycles/21" })).status, 404);
+  assert.equal((await put({ status: "ACTIVE" })).status, 400);
+  assert.equal((await put({ status: "closed" })).status, 409);
+  assert.equal((await put({ status: "active" }, { path: "/cycles/20" })).status, 404);
+  assert.equal(state.updates.length, 0);
+  for (const status of ["active", "distributing", "closed"]) {
+    const result = await put({ status });
+    assert.equal(result.status, 200);
+    assert.equal(result.body.cycle.status, status);
+    assert.deepEqual(state.updates.at(-1), { status });
+  }
+  assert.equal((await put({ status: "active" })).status, 409);
 });

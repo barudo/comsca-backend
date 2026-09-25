@@ -55,6 +55,7 @@ function createRouter(database) {
   router.get(["/users/me", "/api/v1/users/me"], authenticate, users.me.bind(users));
   router.get(["/cycles", "/api/v1/cycles"], authenticate, cycles.list.bind(cycles));
   router.post("/api/v1/cycles", authenticate, cycles.create.bind(cycles));
+  router.put("/api/v1/cycles/:id", authenticate, cycles.update.bind(cycles));
   router.patch(["/cycles/:id", "/api/v1/cycles/:id"], authenticate, cycles.update.bind(cycles));
   router.get("/", home.index.bind(home));
   // The legacy username/password login still requires a resolved group.

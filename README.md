@@ -174,6 +174,21 @@ non-closed cycle, never a newer historical row.
 
 ## Update a cycle
 
+Use `PUT /api/v1/cycles/:id` to update a cycle, including status changes:
+
+```http
+PUT /api/v1/cycles/20
+Authorization: Bearer <access-token>
+x-group-slug: your-group
+Content-Type: application/json
+
+{ "status": "active" }
+```
+
+PUT uses the same partial-update behavior, authorization, and lifecycle rules as
+PATCH below. There is no unversioned PUT alias. Allowed forward transitions are
+`draft` → `active` → `distributing` → `closed`.
+
 `PATCH /cycles/:id` (also `/api/v1/cycles/:id`) requires a Bearer token and
 an OWNER or ADMIN database profile in the group selected by `x-group-slug`.
 It returns HTTP 200 with `{ "success": true, "cycle": { ... } }`.
