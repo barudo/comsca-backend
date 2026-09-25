@@ -87,9 +87,10 @@ migration conversion, preflight checks, API compatibility changes, and rollback.
 
 `GET /api/v1/cycles` requires a Bearer token and an
 OWNER/ADMIN database profile in the group selected by `x-group-slug`.
-Apply migration `013_allow_cycle_list_columns.js` before deploying this endpoint;
-it grants the existing RLS reader access to the cycle's financial columns and
-`updated_at` without changing group isolation.
+Apply migrations through `017_add_cycle_subscription_and_share_limit.js` before deploying this
+endpoint; migration 016 grants the existing RLS reader access to `name`,
+`description`, `absence_penalty`, and `required_monthly_contribution` without
+changing group isolation.
 
 ```http
 GET /api/v1/cycles
@@ -102,7 +103,9 @@ The `cycles` array contains at most one cycle: the latest with status `draft`,
 `distributing`, or `active`, ordered by `created_at DESC, id DESC`. Closed cycles
 are excluded before selecting the latest result.
 Each cycle includes `id`, `group_id`, `interest_rate`, `interest_period`,
-`interest_method`, `cost_per_share`, `status`, `created_at`, and `updated_at`.
+`interest_method`, `cost_per_share`, `status`, `created_at`, `updated_at`, `name`,
+`description`, `absence_penalty`, `required_monthly_contribution`,
+`starting_subscription`, and `maximum_monthly_shares`.
 Decimals retain PostgreSQL's string representation. The current ID is the returned
 cycle's ID. When no matching cycle exists (including groups with only closed
 cycles), the response contains `cycles: []` and `current_cycle_id: null`.
@@ -119,7 +122,7 @@ API convention: use `/api/v1/` for all new endpoints; do not add unversioned ali
 
 `POST /api/v1/cycles` requires a Bearer token and an OWNER or
 ADMIN database profile in the group selected by `x-group-slug`.
-Apply migrations through `015_add_cycle_absence_penalty.js` before deploying this version.
+Apply migrations through `017_add_cycle_subscription_and_share_limit.js` before deploying this version.
 
 ```http
 POST /api/v1/cycles
@@ -166,7 +169,7 @@ and other unsupported fields are rejected.
 Success returns HTTP 201 with `{ "success": true, "cycle": { ... } }`, including
 the saved ID, group ID, name, description, financial settings (including the two
 new currency fields), status, and timestamps. These new fields are supported by
-creation; list and update endpoints retain their existing fields. Invalid input
+creation, listing, and updates. Invalid input
 returns 400, missing/invalid authentication 401, missing group membership or an
 unauthorized role 403, unknown group 404, and an existing non-closed cycle in the
 same group 409. `current_cycle_id` in the group-user listing identifies the sole
@@ -192,6 +195,14 @@ PATCH below. There is no unversioned PUT alias. Allowed forward transitions are
 `PATCH /cycles/:id` (also `/api/v1/cycles/:id`) requires a Bearer token and
 an OWNER or ADMIN database profile in the group selected by `x-group-slug`.
 It returns HTTP 200 with `{ "success": true, "cycle": { ... } }`.
+
+All cycle detail fields are accepted: `name`, `description`, the interest fields,
+`cost_per_share`, `absence_penalty`, `required_monthly_contribution`,
+`starting_subscription`, and `maximum_monthly_shares`. Detail edits require a
+`draft` cycle. `starting_subscription` is nullable nonnegative currency with
+at most 16 integer digits and 2 decimal places; `maximum_monthly_shares` is a
+nullable JSON integer from 1 to 2147483647. These two fields are also accepted
+on creation and returned by GET. Apply migrations through 017 before deployment.
 
 Send only the fields to change. Financial fields use the same values and decimal
 limits as creation. Omitted fields retain their saved values; the resulting

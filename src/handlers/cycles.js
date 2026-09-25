@@ -1,13 +1,14 @@
 const cycleColumns = ["id", "group_id", "interest_rate", "interest_period", "interest_method",
   "cost_per_share", "status", "created_at", "updated_at"];
-const creationFields = ["name", "description", "absence_penalty", "required_monthly_contribution"];
-const creationColumns = [...cycleColumns, ...creationFields];
+const detailFields = ["name", "description", "absence_penalty", "required_monthly_contribution",
+  "starting_subscription", "maximum_monthly_shares"];
+const allCycleColumns = [...cycleColumns, ...detailFields];
 
 function cycleInput(body, current) {
   const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
   if (!body || typeof body !== "object" || Array.isArray(body)) fail("A cycle object is required");
   const allowed = ["interest_rate", "interest_period", "interest_method", "cost_per_share", "status"];
-  if (!current) allowed.push(...creationFields);
+  allowed.push(...detailFields);
   if (Object.keys(body).some(key => !allowed.includes(key))) fail("Unsupported cycle field");
   if (current) {
     if (!Object.keys(body).length) fail("At least one cycle field is required");
@@ -43,19 +44,24 @@ function cycleInput(body, current) {
     cost_per_share: decimal("cost_per_share", 18, 2, true),
     status: body.status === undefined ? "draft" : body.status,
   };
-  if (!current) {
-    for (const field of ["name", "description"]) {
-      const value = body[field] ?? null;
-      if (value !== null && (typeof value !== "string" || value.includes("\u0000"))) {
-        fail(`${field} must be a string without null characters`);
-      }
-      if (field === "name" && value !== null && [...value].length > 255) {
-        fail("name must be at most 255 characters");
-      }
-      values[field] = value;
+  for (const field of ["name", "description"]) {
+    const value = body[field] ?? null;
+    if (value !== null && (typeof value !== "string" || value.includes("\u0000"))) {
+      fail(`${field} must be a string without null characters`);
     }
-    values.absence_penalty = decimal("absence_penalty", 18, 2, false);
-    values.required_monthly_contribution = decimal("required_monthly_contribution", 18, 2, false);
+    if (field === "name" && value !== null && [...value].length > 255) {
+      fail("name must be at most 255 characters");
+    }
+    values[field] = value;
+  }
+  values.absence_penalty = decimal("absence_penalty", 18, 2, false);
+  values.required_monthly_contribution = decimal("required_monthly_contribution", 18, 2, false);
+  values.starting_subscription = decimal("starting_subscription", 18, 2, false);
+  values.maximum_monthly_shares = body.maximum_monthly_shares ?? null;
+  if (values.maximum_monthly_shares !== null &&
+      (!Number.isInteger(values.maximum_monthly_shares) || values.maximum_monthly_shares < 1 ||
+       values.maximum_monthly_shares > 2147483647)) {
+    fail("maximum_monthly_shares must be a positive integer at most 2147483647");
   }
   if (!["draft", "active", "distributing", "closed"].includes(values.status)) {
     fail("status must be draft, active, distributing, or closed");
@@ -86,7 +92,7 @@ class CyclesHandler {
       const cycles = await db.transaction(async trx => {
         await trx.raw("SET LOCAL ROLE comsca_group_reader");
         await trx.raw("SELECT set_config('app.group_id', ?, true)", [String(request.group.id)]);
-        return trx("cycles").where({ group_id: request.group.id }).select(cycleColumns)
+        return trx("cycles").where({ group_id: request.group.id }).select(allCycleColumns)
           .whereIn("status", ["draft", "distributing", "active"])
           .orderBy("created_at", "desc").orderBy("id", "desc").limit(1);
       });
@@ -112,7 +118,7 @@ class CyclesHandler {
           throw Object.assign(new Error("New cycles must start in draft status"), { status: 400 });
         }
         const [created] = await trx("cycles").insert({ ...values, group_id: request.group.id })
-          .returning(creationColumns);
+          .returning(allCycleColumns);
         return created;
       });
       return response.status(201).json({ success: true, cycle });
@@ -142,7 +148,7 @@ class CyclesHandler {
         }
         // Check the locked, current row, not a status supplied by the client.
         const current = await trx("cycles").where({ id, group_id: request.group.id })
-          .forUpdate().first(...cycleColumns);
+          .forUpdate().first(...allCycleColumns);
         if (!current) {
           throw Object.assign(new Error("Cycle not found in this group"), { status: 404 });
         }
@@ -158,7 +164,7 @@ class CyclesHandler {
         if (!hasFinancialFields && values.status === current.status) return current;
         const changes = Object.fromEntries(Object.keys(request.body).map(key => [key, values[key]]));
         const [updated] = await trx("cycles").where({ id, group_id: request.group.id })
-          .update({ ...changes, updated_at: trx.raw("clock_timestamp()") }).returning(cycleColumns);
+          .update({ ...changes, updated_at: trx.raw("clock_timestamp()") }).returning(allCycleColumns);
         return updated;
       });
       return response.json({ success: true, cycle });

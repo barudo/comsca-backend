@@ -48,7 +48,8 @@ function fixture(t) {
     state.inserts.push(values);
     assert.deepEqual(query.returning, ["id", "group_id", "interest_rate", "interest_period", "interest_method",
       "cost_per_share", "status", "created_at", "updated_at",
-      "name", "description", "absence_penalty", "required_monthly_contribution"]);
+      "name", "description", "absence_penalty", "required_monthly_contribution",
+      "starting_subscription", "maximum_monthly_shares"]);
     return [{ id: 20, ...values, created_at: "2026-09-20T00:00:00.000Z", updated_at: "2026-09-20T00:00:00.000Z" }];
   } });
   const handler = serverless(createApp(db, { getUser: async () => {
@@ -70,7 +71,7 @@ function fixture(t) {
     patch: (body, options) => send("PATCH", body, options) };
 }
 
-const emptyCreationFields = { name: null, description: null, absence_penalty: null, required_monthly_contribution: null };
+const emptyCreationFields = { name: null, description: null, absence_penalty: null, required_monthly_contribution: null, starting_subscription: null, maximum_monthly_shares: null };
 
 const terms = { interest_rate: "2.500000", interest_period: "MONTHLY", interest_method: "COMPOUND", cost_per_share: "100.00" };
 
@@ -257,7 +258,7 @@ test("cycle updates validate IDs, request shape, protected fields and merged fin
   }
   assert.equal(state.cycleReads, 0);
   for (const body of [{}, null, [], { group_id: 2 }, { id: "21" }, { created_at: "today" },
-    { updated_at: "today" }, { role: "OWNER" }, { name: "x" }, { status: "ACTIVE" },
+    { updated_at: "today" }, { role: "OWNER" }, { unknown_field: "x" }, { status: "ACTIVE" },
     { status: "DISTRBUTING" }, { status: "inactive" }, { status: null }, { status: "ended" },
     { interest_rate: null }, { interest_method: null }, { interest_period: null },
     { interest_rate: -1 }, { interest_rate: "1000" }, { interest_rate: "0.0000001" },
@@ -355,4 +356,43 @@ test("PUT updates cycle status with existing transition and authorization rules"
     assert.deepEqual(state.updates.at(-1), { status });
   }
   assert.equal((await put({ status: "active" })).status, 409);
+});
+
+
+test("PUT accepts full cycle details and preserves omitted fields on later edits", async t => {
+  const { state, put, post } = fixture(t);
+  const body = { name: "2026 to 2027", description: "This is the description",
+    interest_rate: "2.500000", interest_period: "MONTHLY", interest_method: "COMPOUND",
+    starting_subscription: "5000", maximum_monthly_shares: 10, cost_per_share: "100.00",
+    absence_penalty: "100.00", required_monthly_contribution: "20.00" };
+  const result = await put(body);
+  assert.equal(result.status, 200);
+  assert.deepEqual(state.updates.at(-1), body);
+  for (const [key, value] of Object.entries(body)) assert.equal(result.body.cycle[key], value);
+  const partial = await put({ name: "Renamed" });
+  assert.equal(partial.status, 200);
+  assert.equal(partial.body.cycle.starting_subscription, "5000");
+  assert.equal(partial.body.cycle.maximum_monthly_shares, 10);
+  assert.deepEqual(state.updates.at(-1), { name: "Renamed" });
+  assert.equal((await post(body)).status, 201);
+  for (const status of ["active", "distributing", "closed"]) {
+    state.cycle.status = status;
+    assert.equal((await put(body)).status, 409);
+  }
+});
+
+test("PUT validates new fields and permits explicitly clearing nullable settings", async t => {
+  const { state, put } = fixture(t);
+  for (const body of [{ name: 42 }, { name: "x".repeat(256) }, { description: {} },
+    { absence_penalty: "-1" }, { required_monthly_contribution: "0.001" },
+    { starting_subscription: "NaN" }, { starting_subscription: "10000000000000000" },
+    { starting_subscription: -1 }, { maximum_monthly_shares: 0 },
+    { maximum_monthly_shares: -1 }, { maximum_monthly_shares: 1.5 },
+    { maximum_monthly_shares: "10" }, { maximum_monthly_shares: 2147483648 }]) {
+    assert.equal((await put(body)).status, 400, JSON.stringify(body));
+  }
+  assert.equal(state.updates.length, 0);
+  assert.equal((await put({ starting_subscription: "0.00", maximum_monthly_shares: 2147483647 })).status, 200);
+  assert.equal((await put(emptyCreationFields)).status, 200);
+  for (const key of Object.keys(emptyCreationFields)) assert.equal(state.cycle[key], null);
 });
