@@ -391,6 +391,57 @@ header, `401` for missing or invalid authentication, `404` for an unknown group,
 and `403` if the caller has no linked profile in the selected group. Provider
 failures return `429`, `502`, or `503` as appropriate.
 
+### Update your profile
+
+`PUT /api/v1/users/me` updates the authenticated user's profile in the selected
+group. All group roles can use it. Use the same Bearer token and `x-group-slug`
+headers as GET, plus `Content-Type: application/json`.
+
+```json
+{
+  "first_name": "Ana",
+  "family_name": "Cruz",
+  "address": "123 Main Street"
+}
+```
+
+Supply at least one of these fields; omitted fields remain unchanged. Names must
+be nonempty strings of at most 255 characters. Address accepts a nonempty string
+of at most 4000 characters or `null` to clear it. Strings are trimmed. Unsupported
+fields, including phone, passwords, email, username, role and identity fields,
+are rejected with `400` without applying any updates. Success returns `200` with
+the same `{ "success": true, "user": { ... }, "group": { ... } }` shape as GET.
+Authentication and group errors follow GET's status codes.
+
+### Change your password
+
+`PUT /api/v1/users/me/password` changes the authenticated user's Supabase Auth
+password. Requires the same headers and a linked profile in the selected group.
+
+```json
+{
+  "new_password": "your-new-strong-password",
+  "repeat_new_password": "your-new-strong-password"
+}
+```
+
+Both fields are required and must match exactly. Passwords are not trimmed and
+must contain at least 8 characters and at most 72 UTF-8 bytes. Other fields are
+rejected. The password is sent to Supabase using the caller's access token;
+the application's legacy password column is not changed. Success returns `200`:
+
+```json
+{ "success": true, "message": "Password updated successfully" }
+```
+
+Validation, weak passwords and reuse of the current password return `400`.
+Supabase reauthentication requirements return `403` with instructions to sign in
+again. The endpoint respects the configured [Supabase password policy](https://supabase.com/docs/guides/auth/password-security);
+projects requiring the current password receive `403` and must use a Supabase
+password recovery flow. Authentication/group errors follow GET; provider throttling
+and outages return `429`, `502`, or `503`. Both update endpoints use
+`Cache-Control: no-store` and never return passwords or session tokens.
+
 ### Add a group member
 
 `POST /groups/users` (also `/api/v1/groups/users`, `/user`, and `/api/v1/user`) creates a member profile in

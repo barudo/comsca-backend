@@ -27,6 +27,12 @@ function createRouter(database) {
   const auth = new SupabaseAuthHandler();
   const home = new HomeHandler();
 
+  // Include early JSON/group errors in the current-user update cache policy.
+  router.use(["/api/v1/users/me", "/api/v1/users/me/password"], (request, response, next) => {
+    if (request.method === "PUT") response.set("Cache-Control", "no-store");
+    next();
+  });
+
   const publicRoutes = express.Router();
   // Verify webhook signatures against the original bytes before JSON parsing.
   publicRoutes.use("/api/v1/hooks", express.raw({ type: "application/json", limit: "32kb" }));
@@ -54,6 +60,8 @@ function createRouter(database) {
     authenticate, groupUsers.create.bind(groupUsers));
   router.put("/api/v1/groups/users/:id", authenticate, groupUsers.update.bind(groupUsers));
   router.get(["/users/me", "/api/v1/users/me"], authenticate, users.me.bind(users));
+  router.put("/api/v1/users/me", authenticate, users.update.bind(users));
+  router.put("/api/v1/users/me/password", authenticate, users.password.bind(users));
   router.get(["/cycles", "/api/v1/cycles"], authenticate, cycles.list.bind(cycles));
   router.post("/api/v1/cycles", authenticate, cycles.create.bind(cycles));
   router.put("/api/v1/cycles/:id", authenticate, cycles.update.bind(cycles));

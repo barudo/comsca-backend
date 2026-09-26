@@ -90,6 +90,13 @@ async function authRequest(path, body, accessToken, method = "POST") {
     let message = "Authentication service unavailable";
     if (response.status === 429) {
       status = 429; message = "Too many authentication attempts; try again later";
+    } else if (path === "user" && method === "PUT" && ["weak_password", "same_password"].includes(code)) {
+      status = 400; message = code === "same_password" ? "New password must differ from your current password" :
+        "New password does not meet the password policy";
+    } else if (path === "user" && method === "PUT" && ["reauthentication_needed", "reauthentication_not_valid"].includes(code)) {
+      status = 403; message = "Sign in again before changing your password";
+    } else if (path === "user" && method === "PUT" && code === "current_password_required") {
+      status = 403; message = "The configured password policy requires a password recovery flow";
     } else if (code === "invalid_credentials") {
       status = 401; message = "Invalid phone number or password";
     } else if (code === "phone_not_confirmed") {
@@ -146,4 +153,11 @@ async function getUser({ access_token }) {
   return user;
 }
 
-module.exports = { signUp, verifyOtp, loginPassword, requestOtp, refreshSession, logout, getUser };
+async function updatePassword({ access_token, password }) {
+  const user = await authRequest("user", { password }, access_token, "PUT");
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user?.id || "")) {
+    throw Object.assign(new Error("Invalid authentication response"), { status: 502 });
+  }
+}
+
+module.exports = { signUp, verifyOtp, loginPassword, requestOtp, refreshSession, logout, getUser, updatePassword };
