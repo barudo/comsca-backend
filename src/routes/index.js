@@ -52,6 +52,7 @@ function createRouter(database) {
     authenticate, groupUserAccounts.create.bind(groupUserAccounts));
   router.post(["/user", "/api/v1/user", "/groups/users", "/api/v1/groups/users"],
     authenticate, groupUsers.create.bind(groupUsers));
+  router.put("/api/v1/groups/users/:id", authenticate, groupUsers.update.bind(groupUsers));
   router.get(["/users/me", "/api/v1/users/me"], authenticate, users.me.bind(users));
   router.get(["/cycles", "/api/v1/cycles"], authenticate, cycles.list.bind(cycles));
   router.post("/api/v1/cycles", authenticate, cycles.create.bind(cycles));
