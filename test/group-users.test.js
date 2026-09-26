@@ -36,7 +36,7 @@ function fixture() {
     return { id: authId, user_metadata: { role: "OWNER", group_id: 2 } };
   } }));
   const post = async (body = { firstname: "Ana", lastname: "Cruz" }, options = {}) => {
-    const response = await handler({ version: "2.0", rawPath: options.path || "/user", rawQueryString: "",
+    const response = await handler({ version: "2.0", rawPath: options.path || "/api/v1/user", rawQueryString: "",
       headers: { "content-type": "application/json", authorization: "Bearer verified-token",
         "x-group-slug": "alpha", ...options.headers },
       requestContext: { http: { method: "POST", sourceIp: "127.0.0.1" } },
@@ -50,7 +50,7 @@ test("OWNER and ADMIN create member profiles in the header's group at both route
   const { state, post } = fixture();
   for (const role of ["OWNER", "ADMIN"]) {
     state.role = role;
-    for (const path of ["/user", "/api/v1/user", "/groups/users", "/api/v1/groups/users"]) {
+    for (const path of ["/api/v1/user", "/api/v1/groups/users"]) {
       const result = await post({ firstname: " Ana ", lastname: " Cruz ", username: "ana",
         email: "ana@example.test", phone: "09171234567", address: "Main Street" }, { path });
       assert.equal(result.status, 201);
@@ -74,7 +74,7 @@ test("user creation rejects missing authentication, other groups, and unauthoriz
   assert.equal((await post(undefined, { headers: { "x-group-slug": "beta" } })).status, 403);
   for (const role of ["MEMBER", "TREASURER", "AUDITOR", null, "admin"]) {
     state.role = role;
-    for (const path of ["/user", "/api/v1/user", "/groups/users", "/api/v1/groups/users"]) assert.equal((await post(undefined, { path })).status, 403);
+    for (const path of ["/api/v1/user", "/api/v1/groups/users"]) assert.equal((await post(undefined, { path })).status, 403);
   }
   state.role = "OWNER";
   for (const status of [401, 429, 502, 503]) {

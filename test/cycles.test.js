@@ -168,11 +168,11 @@ test("cycle creation reports current-cycle conflicts without exposing internal f
   }
 });
 
-test("OWNER/ADMIN can partially update draft cycles on both paths without resetting omitted fields", async t => {
+test("OWNER/ADMIN can partially update draft cycles on the versioned path without resetting omitted fields", async t => {
   const { state, patch } = fixture(t);
   for (const role of ["OWNER", "ADMIN"]) {
     state.role = role;
-    for (const path of ["/cycles/20", "/api/v1/cycles/20"]) {
+    for (const path of ["/api/v1/cycles/20"]) {
       const result = await patch({ interest_rate: "3.500000" }, { path });
       assert.equal(result.status, 200);
       assert.equal(result.headers["cache-control"], "no-store");
@@ -254,7 +254,7 @@ test("cycle updates reject unauthorized identities, missing groups and other-gro
 test("cycle updates validate IDs, request shape, protected fields and merged financial settings", async t => {
   const { state, patch } = fixture(t);
   for (const id of ["0", "-1", "1.2", "1e2", "abc", "01", "9223372036854775808", "9999999999999999999999"]) {
-    assert.equal((await patch({ status: "active" }, { path: `/cycles/${id}` })).status, 400);
+    assert.equal((await patch({ status: "active" }, { path: `/api/v1/cycles/${id}` })).status, 400);
   }
   assert.equal(state.cycleReads, 0);
   for (const body of [{}, null, [], { group_id: 2 }, { id: "21" }, { created_at: "today" },
@@ -274,7 +274,7 @@ test("cycle updates validate IDs, request shape, protected fields and merged fin
   assert.equal((await patch({ interest_rate: "1", interest_period: "DAILY", interest_method: "SIMPLE" })).status, 200);
   // Preserve bigint IDs as strings, including beyond JavaScript's safe integers.
   state.cycle.id = "9223372036854775807";
-  assert.equal((await patch({ cost_per_share: "0.01" }, { path: `/cycles/${state.cycle.id}` })).status, 200);
+  assert.equal((await patch({ cost_per_share: "0.01" }, { path: `/api/v1/cycles/${state.cycle.id}` })).status, 200);
 });
 
 test("cycle updates report current-cycle conflicts and hide unexpected database errors", async t => {

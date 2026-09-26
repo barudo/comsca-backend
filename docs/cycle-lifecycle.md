@@ -20,22 +20,22 @@ privileged direct SQL maintenance must respect those rules too.
 
 ## API flow and client changes
 
-1. `POST /cycles` with financial settings, optionally `"status": "draft"`.
+1. `POST /api/v1/cycles` with financial settings, optionally `"status": "draft"`.
    Omitting the status also creates a draft. Creation with `active`,
    `distributing`, `closed`, or the removed `inactive` value returns 400.
-2. `PATCH /cycles/:id` to edit the current draft's financial settings.
-3. `PATCH /cycles/:id` with `{"status":"active"}` to activate it.
-4. `PATCH /cycles/:id` with `{"status":"distributing"}` when the cycle ends.
-5. When payouts are complete, `PATCH /cycles/:id` with `{"status":"closed"}`.
+2. `PATCH /api/v1/cycles/:id` to edit the current draft's financial settings.
+3. `PATCH /api/v1/cycles/:id` with `{"status":"active"}` to activate it.
+4. `PATCH /api/v1/cycles/:id` with `{"status":"distributing"}` when the cycle ends.
+5. When payouts are complete, `PATCH /api/v1/cycles/:id` with `{"status":"closed"}`.
    This records a manager's confirmation; it does not execute or verify payouts.
 6. Create the next draft. POST returns 409 until the previous current cycle closes.
 
-The `/api/v1` aliases behave identically. Status values are lowercase.
+All endpoints require the `/api/v1` prefix. Status values are lowercase.
 Non-closed status-only retries are no-ops. Every update to a closed cycle returns
 409, including repeating `closed`; history cannot be reactivated. Partial edits
 preserve omitted fields, and failed updates change nothing.
 
-`GET /groups/users` now reports membership in the non-closed cycle, even if a
+`GET /api/v1/groups/users` now reports membership in the non-closed cycle, even if a
 closed cycle has a newer timestamp. When only historical cycles remain,
 `current_cycle_id` is null and every `is_current_cycle_member` is false.
 

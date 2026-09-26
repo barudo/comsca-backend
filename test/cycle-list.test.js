@@ -60,7 +60,7 @@ test("GET cycles returns only the latest qualifying cycle for OWNER/ADMIN", asyn
     state.role = role;
     for (const status of ["draft", "active", "distributing"]) {
       state.cycles[1].status = status;
-      for (const path of ["/cycles", "/api/v1/cycles"]) {
+      for (const path of ["/api/v1/cycles"]) {
         const result = await get(path);
         assert.equal(result.status, 200);
         assert.equal(result.headers["cache-control"], "no-store");
@@ -78,7 +78,7 @@ test("GET cycles returns only the latest qualifying cycle for OWNER/ADMIN", asyn
 
 test("GET cycles rejects unauthenticated, non-manager and cross-group access before reading cycles", async t => {
   const { state, get } = fixture(t);
-  for (const path of ["/cycles", "/api/v1/cycles"]) {
+  for (const path of ["/api/v1/cycles"]) {
     assert.equal((await get(path, { authorization: "" })).status, 401);
     assert.equal((await get(path, { "x-group-slug": "" })).status, 400);
     assert.equal((await get(path, { "x-group-slug": "unknown" })).status, 404);

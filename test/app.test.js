@@ -28,7 +28,7 @@ function createTestApp() {
 }
 
 test("slug availability is public and normalizes the query slug", async () => {
-  for (const prefix of ["/groups", "/api/v1/groups"]) {
+  for (const prefix of ["/api/v1/groups"]) {
     const taken = await request(createTestApp(), `${prefix}/validate-slug?slug=%20COMSCA%20`);
     assert.equal(taken.status, 200);
     assert.deepEqual(taken.body, {
@@ -47,7 +47,7 @@ test("slug validation rejects invalid queries before querying the database", asy
   const app = createApp(() => { calls++; throw new Error("Unexpected query"); });
   for (const query of ["", "?slug=", "?slug=%20", "?slug=a&slug=b", "?slug=-bad",
     "?slug=bad-", "?slug=bad_slug", "?slug=ADMIN", `?slug=${"a".repeat(64)}`]) {
-    const result = await request(app, `/groups/validate-slug${query}`);
+    const result = await request(app, `/api/v1/groups/validate-slug${query}`);
     assert.equal(result.status, 400);
     assert.equal(result.body.success, false);
     assert.equal(typeof result.body.message, "string");
@@ -59,43 +59,9 @@ test("slug validation does not report availability when the database fails", asy
   const app = createApp(() => ({ where: () => ({ first: async () => {
     throw new Error("Private database details");
   } }) }));
-  const result = await request(app, "/groups/validate-slug?slug=new-group");
+  const result = await request(app, "/api/v1/groups/validate-slug?slug=new-group");
   assert.equal(result.status, 503);
   assert.deepEqual(result.body, { success: false, message: "Slug validation service unavailable" });
-});
-
-test("GET / rejects requests without a group slug", async () => {
-  const result = await request(createTestApp(), "/");
-
-  assert.equal(result.status, 400);
-  assert.deepEqual(result.body, {
-    success: false,
-    error: "x-group-slug header is required",
-  });
-});
-
-test("GET / rejects unknown group slugs", async () => {
-  const result = await request(createTestApp(), "/", {
-    headers: { "x-group-slug": "unknown" },
-  });
-
-  assert.equal(result.status, 404);
-  assert.deepEqual(result.body, {
-    success: false,
-    error: "Group not found",
-  });
-});
-
-test("GET / returns the welcome response for a known group slug", async () => {
-  const result = await request(createTestApp(), "/", {
-    headers: { "x-group-slug": "comsca" },
-  });
-
-  assert.equal(result.status, 200);
-  assert.deepEqual(result.body, {
-    success: true,
-    message: "On this site will rise the awesome",
-  });
 });
 
 test("POST /api/v1/auth/login reaches the legacy auth handler", async () => {

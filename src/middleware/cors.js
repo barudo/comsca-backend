@@ -22,7 +22,7 @@ module.exports = function cors(request, response, next) {
   const origin = request.get("Origin");
   if (!origin || !allowedOrigin(origin)) return next();
   response.set("Access-Control-Allow-Origin", origin);
-  if (request.method === "OPTIONS") {
+  if (request.method === "OPTIONS" && /^\/api\/v1(?:\/|$)/i.test(request.path)) {
     response.set("Access-Control-Allow-Methods", methods);
     response.set("Access-Control-Allow-Headers", headers);
     response.set("Access-Control-Max-Age", "600");

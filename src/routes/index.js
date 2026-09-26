@@ -11,7 +11,6 @@ const GroupsHandler = require("../handlers/groups");
 const HooksHandler = require("../handlers/hooks");
 const RegistrationHandler = require("../handlers/registration");
 const SupabaseAuthHandler = require("../handlers/supabase-auth");
-const HomeHandler = require("../handlers/home");
 
 function createRouter(database) {
   const router = express.Router();
@@ -25,7 +24,6 @@ function createRouter(database) {
   const hooks = new HooksHandler();
   const registration = new RegistrationHandler();
   const auth = new SupabaseAuthHandler();
-  const home = new HomeHandler();
 
   // Include early JSON/group errors in the current-user update cache policy.
   router.use(["/api/v1/users/me", "/api/v1/users/me/password"], (request, response, next) => {
@@ -42,7 +40,7 @@ function createRouter(database) {
   // Registration and authentication resolve identity without a group header.
   publicRoutes.post("/api/v1/user/register", registration.register.bind(registration));
   publicRoutes.post("/api/v1/user/verify", registration.verify.bind(registration));
-  publicRoutes.get(["/groups/validate-slug", "/api/v1/groups/validate-slug"], groups.validateSlug.bind(groups));
+  publicRoutes.get("/api/v1/groups/validate-slug", groups.validateSlug.bind(groups));
   publicRoutes.post("/api/v1/auth/login/password", auth.loginPassword.bind(auth));
   publicRoutes.post("/api/v1/auth/login/otp/request", auth.requestOtp.bind(auth));
   publicRoutes.post("/api/v1/auth/login/otp/verify", auth.verifyOtp.bind(auth));
@@ -53,20 +51,19 @@ function createRouter(database) {
   router.use(publicRoutes);
 
   router.use(groupSlugMiddleware(database));
-  router.get(["/groups/users", "/api/v1/groups/users"], authenticate, groupUserList.list.bind(groupUserList));
-  router.post(["/groups/users/:id/account", "/api/v1/groups/users/:id/account"],
+  router.get("/api/v1/groups/users", authenticate, groupUserList.list.bind(groupUserList));
+  router.post("/api/v1/groups/users/:id/account",
     authenticate, groupUserAccounts.create.bind(groupUserAccounts));
-  router.post(["/user", "/api/v1/user", "/groups/users", "/api/v1/groups/users"],
+  router.post(["/api/v1/user", "/api/v1/groups/users"],
     authenticate, groupUsers.create.bind(groupUsers));
   router.put("/api/v1/groups/users/:id", authenticate, groupUsers.update.bind(groupUsers));
-  router.get(["/users/me", "/api/v1/users/me"], authenticate, users.me.bind(users));
+  router.get("/api/v1/users/me", authenticate, users.me.bind(users));
   router.put("/api/v1/users/me", authenticate, users.update.bind(users));
   router.put("/api/v1/users/me/password", authenticate, users.password.bind(users));
-  router.get(["/cycles", "/api/v1/cycles"], authenticate, cycles.list.bind(cycles));
+  router.get("/api/v1/cycles", authenticate, cycles.list.bind(cycles));
   router.post("/api/v1/cycles", authenticate, cycles.create.bind(cycles));
   router.put("/api/v1/cycles/:id", authenticate, cycles.update.bind(cycles));
-  router.patch(["/cycles/:id", "/api/v1/cycles/:id"], authenticate, cycles.update.bind(cycles));
-  router.get("/", home.index.bind(home));
+  router.patch("/api/v1/cycles/:id", authenticate, cycles.update.bind(cycles));
   // The legacy username/password login still requires a resolved group.
   router.get("/api/v1/auth", legacyAuth.index.bind(legacyAuth));
   router.post("/api/v1/auth/login", legacyAuth.login.bind(legacyAuth));

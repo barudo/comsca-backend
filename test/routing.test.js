@@ -57,7 +57,7 @@ test("OPTIONS without Origin remains public for public endpoints and group-scope
   }));
   for (const [path, methods] of [
     ["/api/v1/hooks/sms", "POST"], ["/api/v1/user/register", "POST"],
-    ["/api/v1/user/verify", "POST"], ["/groups/validate-slug", "GET, HEAD"],
+    ["/api/v1/user/verify", "POST"],
     ["/api/v1/groups/validate-slug", "GET, HEAD"],
     ...["/login/password", "/login/otp/request", "/login/otp/verify", "/refresh", "/logout"]
       .map(path => [`/api/v1/auth${path}`, "POST"]),
@@ -72,6 +72,25 @@ test("OPTIONS without Origin remains public for public endpoints and group-scope
   assert.equal(result.status, 200);
   assert.equal(result.headers.allow, "GET, HEAD, POST");
   assert.equal(lookups, 1);
+});
+
+test("unversioned and wrong-prefix paths return 404 without invoking application services", async () => {
+  let calls = 0;
+  const unexpected = () => { calls++; throw new Error("Removed routes must not invoke services"); };
+  const handler = serverless(createApp(unexpected, { getUser: unexpected, signUp: unexpected }));
+  for (const path of ["/", "/groups/validate-slug", "/groups/users", "/groups/users/20/account",
+    "/user", "/users/me", "/users/me/password", "/cycles", "/cycles/20",
+    "/api/v10/cycles", "/api/v1extra/cycles", "/api/v2/cycles", "/missing"]) {
+    for (const method of ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
+      for (const headers of [{}, { "x-group-slug": "group", authorization: "Bearer token",
+        origin: "https://comsca.com", "content-type": "application/json" }]) {
+        const result = await request(handler, path, method, headers, { first_name: "Ana" });
+        assert.equal(result.status, 404, `${method} ${path}`);
+        if (headers.origin) assert.equal(result.headers["access-control-allow-origin"], headers.origin);
+      }
+    }
+  }
+  assert.equal(calls, 0);
 });
 
 test("handler instances use each application's injected services without leaking state", { timeout: 2000 }, async () => {
@@ -103,9 +122,8 @@ test("HEAD preserves GET headers and omits the response body", async () => {
     where: () => ({ first: async () => ({ id: 1, name: "Group", slug: "group" }) }),
   })));
   for (const [path, headers] of [
-    ["/groups/validate-slug", {}],
+    ["/api/v1/groups/validate-slug", {}],
     ["/api/v1/auth", { "x-group-slug": "group" }],
-    ["/", { "x-group-slug": "group" }],
   ]) {
     const get = await request(handler, path, "GET", headers);
     const head = await request(handler, path, "HEAD", headers);

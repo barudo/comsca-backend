@@ -37,7 +37,7 @@ npm install
 npm start
 ```
 
-The endpoint is available at `http://localhost:3000/`.
+The API base URL is `http://localhost:3000/api/v1`. Use the endpoint paths documented below.
 
 ## Routing and handlers
 
@@ -51,7 +51,7 @@ to each method. Database and service dependencies come from `request.app.locals`
 The registry puts raw webhook parsing before JSON parsing, public registration
 and Supabase authentication before group resolution, and group-scoped endpoints
 after it. The legacy username login and auth index still require a group header.
-Existing `/api/v1` paths and short aliases use the same handler methods.
+All registered routes must start with `/api/v1`; unversioned paths return `404`.
 
 ## Database migrations
 
@@ -192,7 +192,7 @@ PUT uses the same partial-update behavior, authorization, and lifecycle rules as
 PATCH below. There is no unversioned PUT alias. Allowed forward transitions are
 `draft` → `active` → `distributing` → `closed`.
 
-`PATCH /cycles/:id` (also `/api/v1/cycles/:id`) requires a Bearer token and
+`PATCH /api/v1/cycles/:id` requires a Bearer token and
 an OWNER or ADMIN database profile in the group selected by `x-group-slug`.
 It returns HTTP 200 with `{ "success": true, "cycle": { ... } }`.
 
@@ -342,12 +342,12 @@ resolved from `x-group-slug`. PostgreSQL RLS isolates users, cycles, and cycle
 members even without application group filters. The role cannot read passwords
 or Auth IDs. Existing authenticated OWNER/ADMIN authorization still applies.
 
-`GET /groups/users` (also `GET /api/v1/groups/users`) lists users belonging to
+`GET /api/v1/groups/users` lists users belonging to
 the group selected by `x-group-slug`. Requires a bearer access token and an
 `OWNER` or `ADMIN` database role in that group, as for user creation.
 
 ```http
-GET /groups/users
+GET /api/v1/groups/users
 Authorization: Bearer <access_token>
 x-group-slug: your-group
 ```
@@ -369,12 +369,12 @@ without the required role in that group. Responses use `Cache-Control: no-store`
 
 ### Current user
 
-`GET /users/me` (also `GET /api/v1/users/me`) returns the authenticated user's
+`GET /api/v1/users/me` returns the authenticated user's
 application profile in the group selected by `x-group-slug`. Available to all
 five group roles.
 
 ```http
-GET /users/me
+GET /api/v1/users/me
 Authorization: Bearer <access_token>
 x-group-slug: your-group
 ```
@@ -444,13 +444,13 @@ and outages return `429`, `502`, or `503`. Both update endpoints use
 
 ### Add a group member
 
-`POST /groups/users` (also `/api/v1/groups/users`, `/user`, and `/api/v1/user`) creates a member profile in
+`POST /api/v1/groups/users` (also `/api/v1/user`) creates a member profile in
 the group identified by `x-group-slug`. Requires migration 008 and a Supabase
 access token from the phone/password or OTP login flow. The legacy username login
 does not issue an access token.
 
 ```http
-POST /groups/users
+POST /api/v1/groups/users
 Authorization: Bearer <access_token>
 x-group-slug: your-group
 Content-Type: application/json
@@ -489,12 +489,12 @@ below for login provisioning; cycle enrollment remains separate.
 
 ### Enable a member's login
 
-`POST /groups/users/:id/account` (also `/api/v1/groups/users/:id/account`) provisions
+`POST /api/v1/groups/users/:id/account` provisions
 a phone/password login for an existing member. Requires `OWNER` or `ADMIN` in
 the `x-group-slug` group; the target must belong to that same group.
 
 ```http
-POST /groups/users/20/account
+POST /api/v1/groups/users/20/account
 Authorization: Bearer <admin_or_owner_access_token>
 x-group-slug: your-group
 Content-Type: application/json
@@ -690,8 +690,7 @@ no migration.
 
 ### Check group slug availability
 
-`GET /groups/validate-slug?slug=my-group` (also available at
-`/api/v1/groups/validate-slug`) requires no `x-group-slug` header.
+`GET /api/v1/groups/validate-slug?slug=my-group` requires no `x-group-slug` header.
 Slugs are trimmed and lowercased using the registration rules.
 Both availability results return HTTP 200:
 
@@ -778,3 +777,6 @@ application authentication and validation. Cookie credentials are not enabled.
 Registration and verification also accept the frontend's ten-digit `9…` mobile
 number and normalize it to `+639…`. Registration validation returns field-specific
 messages in `errors`, with a readable summary in `error`.
+
+All API endpoints use the `/api/v1` prefix. Unversioned URLs (including `/`) return
+`404`; clients must use the versioned paths shown above.

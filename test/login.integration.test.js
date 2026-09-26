@@ -396,7 +396,7 @@ test("login and RLS isolate groups on a reused database connection", {
   await t.test("group user listing includes only current-cycle memberships within the group", async () => {
     const handler = serverless(createApp(db, { getUser: async () => ({ id: authId }) }));
     const list = async () => {
-      const response = await handler({ version: "2.0", rawPath: "/groups/users", rawQueryString: "",
+      const response = await handler({ version: "2.0", rawPath: "/api/v1/groups/users", rawQueryString: "",
         headers: { authorization: "Bearer verified-token", "x-group-slug": group.slug },
         requestContext: { http: { method: "GET", sourceIp: "127.0.0.1" } } }, {});
       assert.equal(response.statusCode, 200);
@@ -458,10 +458,10 @@ test("login and RLS isolate groups on a reused database connection", {
     assert.equal(onlyHistory.users.every(user => !user.is_current_cycle_member), true);
   });
 
-  await t.test("POST /user persists a member only in the caller's managed group", async () => {
+  await t.test("POST /api/v1/user persists a member only in the caller's managed group", async () => {
     const handler = serverless(createApp(db, { getUser: async () => ({ id: authId }) }));
     const postMember = async (slug) => {
-      const result = await handler({ version: "2.0", rawPath: "/user", rawQueryString: "",
+      const result = await handler({ version: "2.0", rawPath: "/api/v1/user", rawQueryString: "",
         headers: { "content-type": "application/json", authorization: "Bearer verified-token", "x-group-slug": slug },
         requestContext: { http: { method: "POST", sourceIp: "127.0.0.1" } },
         body: JSON.stringify({ firstname: "New", lastname: "Member", username: "new-member" }),
@@ -481,10 +481,10 @@ test("login and RLS isolate groups on a reused database connection", {
     assert.equal((await postMember(group.slug)).status, 403);
     await db("users").where({ id: profile.id }).update({ role: "OWNER" });
   });
-  await t.test("POST /cycles creates only the sole draft, and authorizes against committed roles", async () => {
+  await t.test("POST /api/v1/cycles creates only the sole draft, and authorizes against committed roles", async () => {
     const handler = serverless(createApp(db, { getUser: async () => ({ id: authId }) }));
     const post = async (body, slug = group.slug) => {
-      const response = await handler({ version: "2.0", rawPath: "/cycles", rawQueryString: "",
+      const response = await handler({ version: "2.0", rawPath: "/api/v1/cycles", rawQueryString: "",
         headers: { "content-type": "application/json", authorization: "Bearer verified-token", "x-group-slug": slug },
         requestContext: { http: { method: "POST", sourceIp: "127.0.0.1" } },
         body: JSON.stringify(body), isBase64Encoded: false }, {});
@@ -535,10 +535,10 @@ test("login and RLS isolate groups on a reused database connection", {
     await db("users").where({ id: profile.id }).update({ role: "OWNER" });
   });
 
-  await t.test("PATCH /cycles edits only the current draft, completes its lifecycle, and freezes history", async () => {
+  await t.test("PATCH /api/v1/cycles edits only the current draft, completes its lifecycle, and freezes history", async () => {
     const handler = serverless(createApp(db, { getUser: async () => ({ id: authId }) }));
     const patch = async (id, body, slug = group.slug) => {
-      const response = await handler({ version: "2.0", rawPath: `/cycles/${id}`, rawQueryString: "",
+      const response = await handler({ version: "2.0", rawPath: `/api/v1/cycles/${id}`, rawQueryString: "",
         headers: { "content-type": "application/json", authorization: "Bearer verified-token", "x-group-slug": slug },
         requestContext: { http: { method: "PATCH", sourceIp: "127.0.0.1" } },
         body: JSON.stringify(body), isBase64Encoded: false }, {});
@@ -642,7 +642,7 @@ test("login and RLS isolate groups on a reused database connection", {
       await gate("users").whereIn("id", [profile.id, other.id]).forUpdate().select("id");
       pending = connections.map((connection, i) => serverless(createApp(connection, {
         getUser: async () => ({ id: identities[i] }),
-      }))({ version: "2.0", rawPath: "/cycles", rawQueryString: "",
+      }))({ version: "2.0", rawPath: "/api/v1/cycles", rawQueryString: "",
         headers: { "content-type": "application/json", authorization: "Bearer verified-token", "x-group-slug": group.slug },
         requestContext: { http: { method: "POST", sourceIp: "127.0.0.1" } },
         body: JSON.stringify({ cost_per_share: "200" }), isBase64Encoded: false }, {}));
@@ -682,7 +682,7 @@ test("login and RLS isolate groups on a reused database connection", {
     ]).returning("id");
     for (const role of ["OWNER", "ADMIN"]) {
       await db("users").where({ id: actor.id }).update({ role });
-      for (const route of ["/cycles", "/api/v1/cycles"]) {
+      for (const route of ["/api/v1/cycles"]) {
         const result = await list(route);
         assert.equal(result.status, 200);
         assert.equal(result.body.current_cycle_id, current.id);

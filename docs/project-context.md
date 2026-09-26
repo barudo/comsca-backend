@@ -26,7 +26,7 @@ is an orientation, not a completed BMAD planning artifact.
   placement. Preserve that ordering when introducing routes.
 - The owner database connection bypasses RLS. The login and group-user-list
   queries switch to restricted roles with transaction-local group context.
-- `GET /groups/users` and its `/api/v1` alias require OWNER or ADMIN, return only
+- `GET /api/v1/groups/users` requires OWNER or ADMIN, return only
   the selected group's users, and include current-cycle membership information.
 - Cycle lifecycle is draft -> active -> distributing -> closed. Migration 012
   allows only one non-closed cycle per group; this is the current cycle even if

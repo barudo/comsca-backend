@@ -7,6 +7,12 @@ function createApp(database = db, services = {}) {
   app.locals.database = database;
   app.locals.services = services;
   app.use(require("./middleware/cors"));
+  app.use((request, response, next) => {
+    if (!/^\/api\/v1(?:\/|$)/i.test(request.path)) {
+      return response.status(404).json({ success: false, error: "Not found" });
+    }
+    return next();
+  });
 
   app.use(createRouter(database));
 

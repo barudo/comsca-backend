@@ -43,7 +43,7 @@ function fixture(t) {
     if (state.authError) throw state.authError;
     return { id: authId };
   } }));
-  const get = async (path = "/groups/users", headers = {}) => {
+  const get = async (path = "/api/v1/groups/users", headers = {}) => {
     const result = await handler({ version: "2.0", rawPath: path, rawQueryString: "group_id=2&cycle_id=999",
       headers: { authorization: "Bearer verified-token", "x-group-slug": "alpha", ...headers },
       requestContext: { http: { method: "GET", sourceIp: "127.0.0.1" } } }, {});
@@ -52,11 +52,11 @@ function fixture(t) {
   return { state, get };
 }
 
-test("group user list scopes membership to the selected group's non-closed current cycle on both paths", async t => {
+test("group user list scopes membership to the selected group's non-closed current cycle on the versioned path", async t => {
   const { state, get } = fixture(t);
   for (const role of ["OWNER", "ADMIN"]) {
     state.role = role;
-    for (const path of ["/groups/users", "/api/v1/groups/users"]) {
+    for (const path of ["/api/v1/groups/users"]) {
       const result = await get(path);
       assert.equal(result.status, 200);
       assert.equal(result.headers["cache-control"], "no-store");
@@ -76,7 +76,7 @@ test("group user list denies unauthenticated, cross-group, and non-manager acces
   assert.equal((await get(undefined, { authorization: "" })).status, 401);
   assert.equal((await get(undefined, { "x-group-slug": "" })).status, 400);
   assert.equal((await get(undefined, { "x-group-slug": "unknown" })).status, 404);
-  for (const path of ["/groups/users", "/api/v1/groups/users"]) {
+  for (const path of ["/api/v1/groups/users"]) {
     assert.equal((await get(path, { "x-group-slug": "beta" })).status, 403);
     for (const role of ["MEMBER", "TREASURER", "AUDITOR", null]) {
       state.role = role;

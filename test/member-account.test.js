@@ -29,7 +29,7 @@ function fixture() {
       return { id: accountId };
     },
   }));
-  const post = async (body = { password: "initial-password" }, path = "/groups/users/20/account", headers = {}) => {
+  const post = async (body = { password: "initial-password" }, path = "/api/v1/groups/users/20/account", headers = {}) => {
     const response = await handler({ version: "2.0", rawPath: path, rawQueryString: "",
       headers: { "content-type": "application/json", authorization: "Bearer token", "x-group-slug": "alpha", ...headers },
       requestContext: { http: { method: "POST", sourceIp: "127.0.0.1" } },
@@ -41,7 +41,7 @@ function fixture() {
 
 test("owner/admin can provision a group member once, using saved identity and server metadata", async () => {
   for (const role of ["OWNER", "ADMIN"]) {
-    for (const path of ["/groups/users/20/account", "/api/v1/groups/users/20/account"]) {
+    for (const path of ["/api/v1/groups/users/20/account"]) {
       const { state, post } = fixture();
       state.role = role;
       const result = await post(undefined, path);
@@ -67,7 +67,7 @@ test("account provisioning rejects unauthorized callers and invalid targets befo
   }
   state.role = "OWNER";
   for (const id of ["0", "-1", "abc", "1.2", "9223372036854775808"]) {
-    assert.equal((await post(undefined, `/groups/users/${id}/account`)).status, 400);
+    assert.equal((await post(undefined, `/api/v1/groups/users/${id}/account`)).status, 400);
   }
   for (const body of [null, [], {}, { password: 123 }, { password: "short" }, { password: "é".repeat(37) },
     { password: "initial-password", phone: "+639181234567" }, { password: "initial-password", role: "OWNER" }]) {

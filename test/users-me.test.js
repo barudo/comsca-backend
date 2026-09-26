@@ -31,7 +31,7 @@ function fixture() {
     if (state.authError) throw state.authError;
     return { id: authId, user_metadata: { role: "OWNER", group_id: 2 } };
   } }));
-  const get = async (path = "/users/me", headers = {}) => {
+  const get = async (path = "/api/v1/users/me", headers = {}) => {
     const result = await handler({ version: "2.0", rawPath: path, rawQueryString: "user_id=999&group_id=2",
       headers: { authorization: "Bearer verified-token", "x-group-slug": "alpha", ...headers },
       requestContext: { http: { method: "GET", sourceIp: "127.0.0.1" } } }, {});
@@ -40,11 +40,11 @@ function fixture() {
   return { state, get };
 }
 
-test("GET /users/me returns the caller's database profile for every group role", async () => {
+test("GET /api/v1/users/me returns the caller's database profile for every group role", async () => {
   const { state, get } = fixture();
   for (const role of ["OWNER", "ADMIN", "TREASURER", "MEMBER", "AUDITOR"]) {
     state.user.role = role;
-    for (const path of ["/users/me", "/api/v1/users/me"]) {
+    for (const path of ["/api/v1/users/me"]) {
       const result = await get(path);
       const { password, auth_user_id, ...expected } = state.user;
       assert.equal(result.status, 200);
@@ -54,7 +54,7 @@ test("GET /users/me returns the caller's database profile for every group role",
   }
 });
 
-test("GET /users/me requires authentication and the caller's group membership", async () => {
+test("GET /api/v1/users/me requires authentication and the caller's group membership", async () => {
   const { state, get } = fixture();
   for (const authorization of ["", "Basic token", "Bearer token extra"]) {
     assert.equal((await get(undefined, { authorization })).status, 401);
@@ -74,7 +74,7 @@ test("GET /users/me requires authentication and the caller's group membership", 
   assert.equal(state.profileCalls, calls);
 });
 
-test("GET /users/me does not expose database errors", async () => {
+test("GET /api/v1/users/me does not expose database errors", async () => {
   const { state, get } = fixture();
   state.dbError = new Error("Private database details");
   const result = await get();
