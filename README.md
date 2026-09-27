@@ -379,6 +379,17 @@ and cycle-less group accounts are excluded. This endpoint returns definitions,
 not calculated balances. Responses are not cacheable. Missing authentication is
 401; an unauthorized role or membership is 403.
 
+Migration `023_add_transaction_document_numbers.js` adds nullable `document_type`
+and `document_number` fields to transactions. Both must be present together or
+both absent. Types are `RECEIPT`, `DISBURSEMENT_VOUCHER`, and `JOURNAL_VOUCHER`;
+the number is a positive bigint sequence, not a formatted string. Each type has
+its own numbering within a group/cycle; cycle-less group transactions have a
+separate unique group/type sequence. Display prefixes can be derived, e.g.
+`C12-DV-000001`. Existing rows remain unnumbered; no historical numbers are invented.
+This migration stores and protects assigned numbers; it does not increment cycle
+counters or change the equity endpoint. Allocation must be implemented atomically
+with posting. Rollback deletes document-number fields and their values.
+
 Migration `022_add_cycle_document_counters.js` adds `receipt_counter`,
 `disbursement_voucher_counter`, and `journal_voucher_counter` to cycles. Each is
 a nonnegative, non-null bigint defaulting to zero for existing and new cycles.

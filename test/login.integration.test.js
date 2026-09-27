@@ -285,6 +285,52 @@ test("login and RLS isolate groups on a reused database connection", {
     for (const field of fields) assert.equal(next[field], "0");
   });
 
+  await t.test("transaction document numbers validate and isolate numbering scopes", async () => {
+    const [group] = await db("groups").insert({ name: "Documents", slug: "documents" }).returning("id");
+    const cycles = await db("cycles").insert([
+      { group_id: group.id, status: "closed" }, { group_id: group.id, status: "closed" },
+    ]).returning("id");
+    const accounts = await db("accounts").insert([
+      { group_id: group.id, code: "cash", name: "Cash", type: "ASSET" },
+      { group_id: group.id, code: "equity", name: "Equity", type: "EQUITY" },
+    ]).returning("id");
+    const post = (document, cycle_id = cycles[0].id) => db.transaction(async trx => {
+      const [header] = await trx("transactions").insert({ group_id: group.id, cycle_id,
+        type: "EQUITY", amount: "1.00", ...document }).returning("*");
+      const [component] = await trx("transaction_entries").insert({ group_id: group.id,
+        transaction_id: header.id, type: "EQUITY", amount: "1.00" }).returning("id");
+      await trx("account_entries").insert(accounts.map((account, i) => ({ group_id: group.id,
+        transaction_entry_id: component.id, account_id: account.id, amount: i ? "-1.00" : "1.00" })));
+      return header;
+    });
+    const receipt = { document_type: "RECEIPT", document_number: "1" };
+    const original = await post(receipt);
+    await assert.rejects(post(receipt), { code: "23505" });
+    await post(receipt, cycles[1].id);
+    await post({ document_type: "DISBURSEMENT_VOUCHER", document_number: "1" });
+    await post({ document_type: "JOURNAL_VOUCHER", document_number: "1" });
+    await post(receipt, null);
+    await assert.rejects(post(receipt, null), { code: "23505" });
+    for (const document of [ { document_type: "RECEIPT" }, { document_number: "1" },
+      { document_type: "OTHER", document_number: "1" }, { ...receipt, document_number: "0" },
+      { ...receipt, document_number: "-1" } ]) {
+      await assert.rejects(post(document), { code: "23514" });
+    }
+    await post({}); await post({});
+    const large = await post({ ...receipt, document_number: "2147483648" });
+    assert.equal(large.document_number, "2147483648");
+    await assert.rejects(db("transactions").where({ id: large.id }).update(receipt), { code: "23505" });
+    assert.equal((await db("transactions").where({ id: original.id }).first()).document_number, "1");
+    // Exercise rollback/reapplication on this disposable fixture only.
+    const migration = require("../migrations/023_add_transaction_document_numbers");
+    await db.transaction(trx => migration.down(trx));
+    assert.equal(await db.schema.hasColumn("transactions", "document_number"), false);
+    await db.transaction(trx => migration.up(trx));
+    const preserved = await db("transactions").where({ id: original.id }).first();
+    assert.equal(preserved.amount, "1.00");
+    assert.equal(preserved.document_type, null); assert.equal(preserved.document_number, null);
+  });
+
   await t.test("group roles default to member and only accept the five defined roles", async () => {
     const user = await db("users").where({ group_id: groups[0].id }).first();
     assert.equal(user.role, "MEMBER");
@@ -719,7 +765,7 @@ test("login and RLS isolate groups on a reused database connection", {
     const header = result.body.transaction;
     assert.equal(header.cycle_id, cycle.id); assert.equal(header.user_id, member.id);
     assert.equal(header.amount, input.amount); assert.equal(header.type, "EQUITY");
-    assert.deepEqual(JSON.parse(JSON.stringify(await db("transactions").where({ id: header.id }).first())), header);
+    assert.deepEqual(JSON.parse(JSON.stringify(await db("transactions").where({ id: header.id }).first())), { ...header, document_type: null, document_number: null });
     const components = await db("transaction_entries").where({ transaction_id: header.id });
     assert.equal(components.length, 1); assert.equal(components[0].amount, input.amount);
     const postings = await db("account_entries").where({ transaction_entry_id: components[0].id }).orderBy("id");
