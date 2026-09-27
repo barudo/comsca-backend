@@ -379,6 +379,16 @@ and cycle-less group accounts are excluded. This endpoint returns definitions,
 not calculated balances. Responses are not cacheable. Missing authentication is
 401; an unauthorized role or membership is 403.
 
+Migration `022_add_cycle_document_counters.js` adds `receipt_counter`,
+`disbursement_voucher_counter`, and `journal_voucher_counter` to cycles. Each is
+a nonnegative, non-null bigint defaulting to zero for existing and new cycles.
+The value represents the last allocated document number (zero means none).
+These internal counters are not exposed or editable through the cycle API.
+This migration does not allocate numbers or add document fields to transactions.
+Future allocation should increment the relevant counter atomically in the same
+database transaction as the numbered document. Rollback removes all three counters
+and their values; it must not be used after numbering starts without preserving them.
+
 Migration `007_add_cycle_financial_settings.js` stores financial terms on each
 cycle, so different cycles can use different terms:
 

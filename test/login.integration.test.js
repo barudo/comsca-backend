@@ -260,6 +260,31 @@ test("login and RLS isolate groups on a reused database connection", {
   db.client.config.migrations = allMigrations;
   await db.migrate.latest({ ...allMigrations, migrationSource: null });
 
+  await t.test("cycle document counters default, validate and roll back", async () => {
+    const migration = require("../migrations/022_add_cycle_document_counters");
+    const fields = ["receipt_counter", "disbursement_voucher_counter", "journal_voucher_counter"];
+    const [cycle] = await db("cycles").insert({ group_id: groups[0].id, status: "closed" }).returning("*");
+    for (const field of fields) assert.equal(cycle[field], "0");
+    await db.transaction(trx => migration.down(trx));
+    for (const field of fields) assert.equal(await db.schema.hasColumn("cycles", field), false);
+    const before = await db("cycles").where({ id: cycle.id }).first();
+    await db.transaction(trx => migration.up(trx));
+    assert.deepEqual(await db("cycles").where({ id: cycle.id }).first(), {
+      ...before, receipt_counter: "0", disbursement_voucher_counter: "0", journal_voucher_counter: "0",
+    });
+    for (const field of fields) {
+      await assert.rejects(db("cycles").where({ id: cycle.id }).update({ [field]: -1 }), { code: "23514" });
+      await assert.rejects(db("cycles").where({ id: cycle.id }).update({ [field]: null }), { code: "23502" });
+      await db("cycles").where({ id: cycle.id }).increment(field, 1);
+    }
+    const saved = await db("cycles").where({ id: cycle.id }).first();
+    for (const field of fields) assert.equal(saved[field], "1");
+    await db("cycles").where({ id: cycle.id }).update({ receipt_counter: "2147483648" });
+    assert.equal((await db("cycles").where({ id: cycle.id }).first()).receipt_counter, "2147483648");
+    const [next] = await db("cycles").insert({ group_id: groups[0].id, status: "closed" }).returning("*");
+    for (const field of fields) assert.equal(next[field], "0");
+  });
+
   await t.test("group roles default to member and only accept the five defined roles", async () => {
     const user = await db("users").where({ group_id: groups[0].id }).first();
     assert.equal(user.role, "MEMBER");
@@ -872,7 +897,9 @@ test("login and RLS isolate groups on a reused database connection", {
         assert.equal(result.body.cycles.every(row => row.group_id === listGroup.id), true);
         assert.equal(result.body.cycles[0].cost_per_share, "9999999999999999.99");
         const saved = await db("cycles").where({ group_id: listGroup.id }).whereNot({ status: "closed" }).orderBy("created_at", "desc").orderBy("id", "desc");
-        assert.deepEqual(result.body.cycles, JSON.parse(JSON.stringify(saved)));
+        // Internal document counters are deliberately not exposed by the cycle API.
+        const publicCycles = saved.map(({ receipt_counter, disbursement_voucher_counter, journal_voucher_counter, ...cycle }) => cycle);
+        assert.deepEqual(result.body.cycles, JSON.parse(JSON.stringify(publicCycles)));
       }
     }
     for (const status of ["active", "distributing", "closed"]) {
