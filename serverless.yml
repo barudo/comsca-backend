@@ -15,6 +15,9 @@ provider:
   timeout: 20
 
 package:
+  # Serverless v3 uses `npm ls --prod`, rejected by npm 12, and silently
+  # excludes all runtime dependencies. Keep installed dependencies in the ZIP.
+  excludeDevDependencies: false
   patterns:
     - '!.env*'
     - '!test/**'
