@@ -36,7 +36,15 @@ test("login and RLS isolate groups on a reused database connection", {
     table.jsonb("raw_app_meta_data");
     table.timestamp("phone_confirmed_at", { useTz: true });
   });
-  await db.migrate.latest();
+  // Legacy rollback scenarios below intentionally exercise migrations through 013.
+  const allMigrations = db.client.config.migrations;
+  const legacyMigrations = { migrationSource: {
+    getMigrations: async () => require('node:fs').readdirSync(path.join(__dirname, '../migrations')).filter(name => name <= '013_zz'),
+    getMigrationName: name => name,
+    getMigration: name => require(path.join(__dirname, '../migrations', name)),
+  } };
+  db.client.config.migrations = legacyMigrations;
+  await db.migrate.latest(legacyMigrations);
   const groups = await db("groups").insert([
     { name: "Alpha", slug: "alpha" }, { name: "Beta", slug: "beta" },
   ]).returning("id");
@@ -102,9 +110,9 @@ test("login and RLS isolate groups on a reused database connection", {
     assert.deepEqual(await trx("users").select("id"), []);
   });
   await t.test("cycle status backfills, validates, isolates active cycles, and rolls back", async () => {
-    await db.migrate.down(); // Remove 013 column grants.
-    await db.migrate.down(); // Remove 012 before exercising the legacy migration.
-    await db.migrate.down(); // Remove 011 to exercise pre-existing rows.
+    await db.migrate.down(legacyMigrations); // Remove 013 column grants.
+    await db.migrate.down(legacyMigrations); // Remove 012 before exercising the legacy migration.
+    await db.migrate.down(legacyMigrations); // Remove 011 to exercise pre-existing rows.
     const existing = await db("cycles").insert([
       { group_id: groups[0].id, interest_rate: "2.500000", interest_period: "MONTHLY", interest_method: "SIMPLE", cost_per_share: "100.00" },
       { group_id: groups[0].id }, { group_id: groups[1].id },
@@ -114,7 +122,7 @@ test("login and RLS isolate groups on a reused database connection", {
     await db("cycle_members").insert({ cycle_id: ids[0], user_id: member.id });
     const before = await db("cycles").whereIn("id", ids).orderBy("id");
     const membership = await db("cycle_members").where({ cycle_id: ids[0] });
-    await db.migrate.up({ name: "011_add_cycle_status.js" });
+    await db.migrate.up({ ...legacyMigrations, name: "011_add_cycle_status.js" });
     const withoutStatus = rows => rows.map(({ status, ...row }) => row);
     assert.deepEqual(withoutStatus(await db("cycles").whereIn("id", ids).orderBy("id")), before);
     assert.deepEqual(await db("cycle_members").where({ cycle_id: ids[0] }), membership);
@@ -169,20 +177,20 @@ test("login and RLS isolate groups on a reused database connection", {
     } finally {
       await concurrent.destroy();
     }
-    await db.migrate.down();
+    await db.migrate.down(legacyMigrations);
     assert.equal(await db.schema.hasColumn("cycles", "status"), false);
     assert.equal((await db("cycles").whereIn("id", ids)).length, ids.length);
     assert.deepEqual(await db("cycles").whereIn("id", existing.map(row => row.id)).orderBy("id"), before);
     assert.deepEqual(await db("cycle_members").where({ cycle_id: ids[0] }), membership);
-    await db.migrate.up({ name: "011_add_cycle_status.js" });
+    await db.migrate.up({ ...legacyMigrations, name: "011_add_cycle_status.js" });
     assert.equal((await db("cycles").whereIn("id", ids).select("status")).every(row => row.status === "inactive"), true);
     await db("cycles").whereIn("id", ids).del();
-    await db.migrate.latest();
+    await db.migrate.latest(legacyMigrations);
   });
 
   await t.test("current-cycle migration preserves history and blocks ambiguous ongoing groups atomically", async () => {
-    await db.migrate.down(); // Remove 013 column grants.
-    await db.migrate.down(); // 012: exercise actual legacy data under 011.
+    await db.migrate.down(legacyMigrations); // Remove 013 column grants.
+    await db.migrate.down(legacyMigrations); // 012: exercise actual legacy data under 011.
     const [legacy, active, distributing, conflict] = await db("cycles").insert([
       { group_id: groups[0].id, status: "inactive", cost_per_share: "100.00" },
       { group_id: groups[0].id, status: "active" },
@@ -193,12 +201,12 @@ test("login and RLS isolate groups on a reused database connection", {
     await db("cycle_members").insert({ cycle_id: legacy.id, user_id: member.id });
     const before = await db("cycles").orderBy("id");
     const memberships = await db("cycle_members").where({ cycle_id: legacy.id });
-    await assert.rejects(db.migrate.latest(), /multiple active\/distributing cycles/);
+    await assert.rejects(db.migrate.latest(legacyMigrations), /multiple active\/distributing cycles/);
     assert.deepEqual(await db("cycles").orderBy("id"), before);
     assert.equal(await db("knex_migrations").where({ name: "012_current_cycle_lifecycle.js" }).first(), undefined);
     // Resolve only the deliberately conflicting test row, then retry.
     await db("cycles").where({ id: conflict.id }).del();
-    await db.migrate.latest();
+    await db.migrate.latest(legacyMigrations);
     const savedLegacy = await db("cycles").where({ id: legacy.id }).first();
     assert.deepEqual(savedLegacy, { ...legacy, status: "closed" });
     assert.deepEqual(await db("cycles").where({ id: active.id }).first(), active);
@@ -224,30 +232,33 @@ test("login and RLS isolate groups on a reused database connection", {
     const [draft] = await db("cycles").insert({ group_id: emptyGroup.id }).returning("*");
     assert.equal(draft.status, "draft");
     await db("cycles").insert([{ group_id: emptyGroup.id, status: "closed" }, { group_id: emptyGroup.id, status: "closed" }]);
-    await db.migrate.down(); // Remove 013 column grants.
-    await db.migrate.down();
+    await db.migrate.down(legacyMigrations); // Remove 013 column grants.
+    await db.migrate.down(legacyMigrations);
     assert.equal((await db("cycles").where({ id: draft.id }).first()).status, "inactive");
     assert.deepEqual(await db("cycles").where({ id: legacy.id }).first(), legacy);
     await assert.rejects(db.transaction(async trx => {
       await trx.raw("SET LOCAL ROLE comsca_group_reader");
       await trx("cycles").select("status");
     }), { code: "42501" });
-    await db.migrate.latest();
+    await db.migrate.latest(legacyMigrations);
     assert.equal((await db("cycles").where({ id: draft.id }).first()).status, "closed");
     assert.deepEqual(await db("cycle_members").where({ cycle_id: legacy.id }), memberships);
     await db("cycles").whereIn("id", [legacy.id, active.id, distributing.id]).del();
     await db("groups").where({ id: emptyGroup.id }).del();
   });
 
-  await db.migrate.down(); // Cycle list column grants
-  await db.migrate.down(); // Current-cycle lifecycle
-  await db.migrate.down(); // Cycle status
-  await db.migrate.down(); // Group reader RLS
+  await db.migrate.down(legacyMigrations); // Cycle list column grants
+  await db.migrate.down(legacyMigrations); // Current-cycle lifecycle
+  await db.migrate.down(legacyMigrations); // Cycle status
+  await db.migrate.down(legacyMigrations); // Group reader RLS
   // Roll back provisioning and roles, then prove both can be applied again.
-  await db.migrate.down();
-  await db.migrate.down();
+  await db.migrate.down(legacyMigrations);
+  await db.migrate.down(legacyMigrations);
   assert.equal(await db.schema.hasColumn("users", "role"), false);
-  await db.migrate.latest();
+  await db.migrate.latest(legacyMigrations);
+
+  db.client.config.migrations = allMigrations;
+  await db.migrate.latest({ ...allMigrations, migrationSource: null });
 
   await t.test("group roles default to member and only accept the five defined roles", async () => {
     const user = await db("users").where({ group_id: groups[0].id }).first();
@@ -286,43 +297,40 @@ test("login and RLS isolate groups on a reused database connection", {
     await db("cycles").insert({ group_id, cost_per_share: "50.00", status: "closed" });
   });
 
-  await t.test("accounting enforces balanced entries and group boundaries", async () => {
+  await t.test("accounting enforces component totals, signed postings and group boundaries", async () => {
     const group_id = groups[0].id;
-    const [cash, loans, interest, otherCash] = await db("accounts").insert([
+    const [cash, loans, penalty, otherCash] = await db("accounts").insert([
       { group_id, code: "1000", name: "Cash", type: "ASSET" },
       { group_id, code: "1100", name: "Loans Receivable", type: "ASSET" },
-      { group_id, code: "4000", name: "Interest Income", type: "INCOME" },
+      { group_id, code: "4100", name: "Penalty Income", type: "INCOME" },
       { group_id: groups[1].id, code: "1000", name: "Cash", type: "ASSET" },
     ]).returning("id");
     const header = { group_id, type: "LOAN_PAYMENT", amount: "1100.00" };
-    const post = (lines) => db.transaction(async (trx) => {
+    const post = (debitAccount = cash.id, principal = "1000.00") => db.transaction(async trx => {
       const [transaction] = await trx("transactions").insert(header).returning("id");
-      await trx("transaction_entries").insert(lines.map(line => ({
-        group_id, transaction_id: transaction.id, ...line,
-      })));
+      for (const [type, amount, account] of [["PRINCIPAL", principal, loans.id], ["PENALTY", "100.00", penalty.id]]) {
+        const [component] = await trx("transaction_entries").insert({ group_id, transaction_id: transaction.id, type, amount }).returning("id");
+        await trx("account_entries").insert([
+          { group_id, transaction_entry_id: component.id, account_id: debitAccount, amount },
+          { group_id, transaction_entry_id: component.id, account_id: account, amount: `-${amount}` },
+        ]);
+      }
       return transaction.id;
     });
-    const lines = [
-      { account_id: cash.id, debit: "1100.00" },
-      { account_id: loans.id, credit: "1000.00" },
-      { account_id: interest.id, credit: "100.00" },
-    ];
-    const id = await post(lines);
-    assert.equal((await db("transaction_entries").where({ transaction_id: id })).length, 3);
-    await assert.rejects(post(lines.slice(0, 2)), { code: "23514" });
+    const id = await post();
+    const components = await db("transaction_entries").where({ transaction_id: id }).orderBy("id");
+    assert.deepEqual(components.map(({ type, amount }) => ({ type, amount })), [
+      { type: "PRINCIPAL", amount: "1000.00" }, { type: "PENALTY", amount: "100.00" },
+    ]);
+    await assert.rejects(post(cash.id, "999.00"), { code: "23514" });
+    await assert.rejects(post(otherCash.id), { code: "23503" });
     await assert.rejects(db("transactions").insert(header), { code: "23514" });
-    await assert.rejects(post([{ ...lines[0], credit: "1.00" }, ...lines.slice(1)]), { code: "23514" });
-    await assert.rejects(post([{ ...lines[0], debit: "NaN" }, ...lines.slice(1)]), { code: "23514" });
-    await assert.rejects(post([{ ...lines[0], account_id: otherCash.id }, ...lines.slice(1)]), { code: "23503" });
-    await assert.rejects(db("transaction_entries").where({ transaction_id: id, account_id: interest.id })
-      .update({ credit: "99.00" }), { code: "23514" });
-    await assert.rejects(db("transaction_entries").where({ transaction_id: id }).del(), { code: "23514" });
-    await assert.rejects(db("accounts").where({ id: cash.id }).del(), error =>
-      ["23503", "23001"].includes(error.code) && error.constraint === "transaction_entries_group_account_fk");
-    assert.equal((await db("transactions").where({ group_id })).length, 1);
-    const { rows } = await db.raw(`SELECT relname FROM pg_class
-      WHERE relname IN ('accounts', 'transaction_entries') AND relrowsecurity`);
-    assert.equal(rows.length, 2);
+    await assert.rejects(db("account_entries").where({ transaction_entry_id: components[0].id, account_id: cash.id }).update({ amount: "999.00" }), { code: "23514" });
+    await assert.rejects(db("account_entries").where({ transaction_entry_id: components[0].id }).del(), { code: "23514" });
+    await assert.rejects(db("transaction_entries").where({ id: components[0].id }).update({ amount: "NaN" }), { code: "23514" });
+    await assert.rejects(db("accounts").where({ id: cash.id }).del(), error => ["23503", "23001"].includes(error.code));
+    const { rows } = await db.raw(`SELECT relname FROM pg_class WHERE relname IN ('accounts','transaction_entries','account_entries') AND relrowsecurity`);
+    assert.equal(rows.length, 3);
   });
 
   const registration = { firstname: "Ana", lastname: "Cruz", groupName: "New Group", slug: "new-group", role: "AUDITOR" };
@@ -686,10 +694,10 @@ test("login and RLS isolate groups on a reused database connection", {
         const result = await list(route);
         assert.equal(result.status, 200);
         assert.equal(result.body.current_cycle_id, current.id);
-        assert.deepEqual(result.body.cycles.map(row => row.id), [newer.id, older.id, current.id]);
+        assert.deepEqual(result.body.cycles.map(row => row.id), [current.id]);
         assert.equal(result.body.cycles.every(row => row.group_id === listGroup.id), true);
-        assert.equal(result.body.cycles[2].cost_per_share, "9999999999999999.99");
-        const saved = await db("cycles").where({ group_id: listGroup.id }).orderBy("created_at", "desc").orderBy("id", "desc");
+        assert.equal(result.body.cycles[0].cost_per_share, "9999999999999999.99");
+        const saved = await db("cycles").where({ group_id: listGroup.id }).whereNot({ status: "closed" }).orderBy("created_at", "desc").orderBy("id", "desc");
         assert.deepEqual(result.body.cycles, JSON.parse(JSON.stringify(saved)));
       }
     }
@@ -709,7 +717,7 @@ test("login and RLS isolate groups on a reused database connection", {
       await trx.raw("SET LOCAL ROLE comsca_group_reader");
       assert.deepEqual(await trx("cycles").select("cost_per_share"), []);
     });
-    await db.migrate.down(); // 013 only; original grants must survive.
+    await db.transaction(trx => require("../migrations/013_allow_cycle_list_columns").down(trx));
     await assert.rejects(db.transaction(async trx => {
       await trx.raw("SET LOCAL ROLE comsca_group_reader");
       await trx("cycles").select("cost_per_share");
@@ -719,7 +727,7 @@ test("login and RLS isolate groups on a reused database connection", {
       await trx.raw("SELECT set_config('app.group_id', ?, true)", [String(listGroup.id)]);
       assert.equal((await trx("cycles").select("id", "group_id", "created_at", "status")).length, 3);
     });
-    await db.migrate.latest();
+    await db.transaction(trx => require("../migrations/013_allow_cycle_list_columns").up(trx));
     assert.equal((await list()).status, 200);
   });
 

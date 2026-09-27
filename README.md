@@ -258,34 +258,64 @@ context and the business event time; `occurred_at` defaults to now. `created_at`
 and `updated_at` also default to now; writers must maintain `updated_at` on edits.
 Row level security is enabled with no public API policies, matching existing tables.
 
-Migration `006_create_accounts_and_transaction_entries.js` adds group-owned
-`accounts` (unique code per group, name, description, and type: `ASSET`,
-`LIABILITY`, `EQUITY`, `INCOME`, or `EXPENSE`) and `transaction_entries`.
-Each entry references a transaction and an account in the same group and has
-exactly one positive `debit` or `credit`, with the other zero. Both amounts use
-18 digits including 2 decimal places. Referenced accounts cannot be deleted.
+Migrations `018_scope_account_ledger.js` and `019_seed_cycle_accounts.js` separate
+business components from accounting postings. `transactions` remain headers;
+`transaction_entries` contain `type`, positive exact decimal `amount`, description,
+and timestamps. Read member breakdowns by joining these two tables, without accounts.
+`account_entries` link a component to an account with a signed `amount`: positive
+is debit, negative is credit. Money uses `numeric(18,2)` throughout.
 
-Save a transaction and its entries together inside a Knex `db.transaction(...)`.
-A deferred database constraint requires at least two entries with equal total
-debits and credits at commit. Entry inserts, updates, and deletes also trigger
-this check and update the parent transaction's `updated_at`. An entry's group
-and transaction cannot be reassigned. Existing transactions are not backfilled;
-they require balanced entries when next edited. Concurrent entry writes serialize
-through their parent transaction; callers must handle database transaction retries.
+Save headers, components and postings in one database transaction. Deferred checks
+require component amounts to sum to the header, and each component's debit and
+credit totals to equal its amount. Parent writes serialize competing changes;
+callers must retry serialization failures or deadlocks. Group and membership
+foreign keys remain enforced. Historical cycles are valid; group operations may
+omit both member and cycle. A cycle account only accepts its own cycle's postings;
+nullable-cycle group accounts accept group or cycle activity. Account group/cycle
+ownership is immutable, and account codes are unique within their group/cycle scope.
+All three ledger tables and accounts enable RLS without public API policies.
 
-For a `LOAN_PAYMENT` of 1,100 covering 1,000 principal and 100 interest, record:
+Activating a cycle atomically creates the following chart, also backfilled for
+existing active/distributing cycles. Accounts start with zero balances; closed
+history is retained without a new chart or balance carryover. Repeated activation
+preserves existing accounts; incompatible reserved names/types abort activation.
 
-| Account | Debit | Credit |
-| --- | ---: | ---: |
-| Cash | 1,100 | 0 |
-| Loans Receivable | 0 | 1,000 |
-| Interest Income | 0 | 100 |
+| Code | Account | Type |
+| --- | --- | --- |
+| 1000 | Cash | ASSET |
+| 1100 | Loans Receivable | ASSET |
+| 1200 | Interest Receivable | ASSET |
+| 1300 | Penalties Receivable | ASSET |
+| 2000 | Accounts Payable | LIABILITY |
+| 3000 | Equity | EQUITY |
+| 4000 | Interest Income | INCOME |
+| 4100 | Penalty Income | INCOME |
+| 4200 | Other Income | INCOME |
+| 4300 | Donation Income | INCOME |
+| 5000 | Operating Expenses | EXPENSE |
 
-If interest was previously recorded as a receivable, credit Interest Receivable
-instead of recognizing the income again. Derive account balances from entries:
-debits minus credits for assets and expenses, credits minus debits for liabilities,
-equity, and income. No mutable balance column or default accounts are created.
-Both new tables enable row level security without public API policies.
+A payment header of 1,100 can contain these independently balanced components:
+
+| Component | Amount | Debit (+) | Credit (-) |
+| --- | ---: | --- | --- |
+| LOAN_PRINCIPAL | 1,000 | Cash 1,000 | Loans Receivable -1,000 |
+| PENALTY | 100 | Cash 100 | Penalty Income -100 |
+
+For a loan disbursement of 1,000, create one component for 1,000, debit Loans
+Receivable 1,000 and credit the selected funding asset -1,000. Previously accrued
+penalties credit Penalties Receivable instead. Posting rules are the writer's
+responsibility; no automatic type rules or ledger API are added. Derive balances
+from signed postings (reverse the sign for liabilities, equity and income).
+
+Legacy debit/credit rows become physical account postings, preserving IDs, values,
+descriptions and timestamps. One aggregate component uses each header's type and
+amount; no historical split is guessed. Referenced account definitions are cloned
+into known historical cycles, retaining original group accounts for cycle-less
+history. Migration aborts if legacy totals disagree with headers. Writers must
+switch from the old debit/credit entry shape when applying these migrations;
+there is no second writable posting representation. Rollback of 019 retains all
+accounts. Rollback of 018 rejects cycle ownership or component data that the old
+schema cannot preserve; use a verified backup for incompatible downgrades.
 
 Migration `007_add_cycle_financial_settings.js` stores financial terms on each
 cycle, so different cycles can use different terms:
