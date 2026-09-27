@@ -668,6 +668,123 @@ test("login and RLS isolate groups on a reused database connection", {
       await Promise.all(connections.map(connection => connection.destroy()));
     }
   });
+  await t.test("POST equity persists balanced postings and rolls back failures", async () => {
+    const [group] = await db("groups").insert({ name: "Equity", slug: "equity-posting" }).returning("id");
+    const authId = "88888888-8888-4888-8888-888888888888";
+    await db("auth.users").insert({ id: authId });
+    const [actor, member] = await db("users").insert([
+      { auth_user_id: authId, group_id: group.id, first_name: "Equity", family_name: "Treasurer", role: "TREASURER" },
+      { group_id: group.id, first_name: "Equity", family_name: "Member", role: "MEMBER" },
+    ]).returning("id");
+    const [cycle] = await db("cycles").insert({ group_id: group.id, status: "active" }).returning("id");
+    await db("cycle_members").insert({ cycle_id: cycle.id, user_id: member.id });
+    const accounts = await db("accounts").where({ cycle_id: cycle.id });
+    const cash = accounts.find(a => a.code === "1000");
+    const equity = accounts.find(a => a.code === "3000");
+    const input = { debit: cash.id, credit: equity.id, amount: "9999999999999999.99", user_id: member.id };
+    const handler = serverless(createApp(db, { getUser: async () => ({ id: authId }) }));
+    const post = async (body = input, slug = "equity-posting") => {
+      const result = await handler({ version: "2.0", rawPath: "/api/v1/transactions/equity", rawQueryString: "group_id=999",
+        headers: { "content-type": "application/json", authorization: "Bearer token", "x-group-slug": slug },
+        requestContext: { http: { method: "POST", sourceIp: "127.0.0.1" } }, body: JSON.stringify(body), isBase64Encoded: false }, {});
+      return { status: result.statusCode, body: JSON.parse(result.body) };
+    };
+    const result = await post();
+    assert.equal(result.status, 201);
+    const header = result.body.transaction;
+    assert.equal(header.cycle_id, cycle.id); assert.equal(header.user_id, member.id);
+    assert.equal(header.amount, input.amount); assert.equal(header.type, "EQUITY");
+    assert.deepEqual(JSON.parse(JSON.stringify(await db("transactions").where({ id: header.id }).first())), header);
+    const components = await db("transaction_entries").where({ transaction_id: header.id });
+    assert.equal(components.length, 1); assert.equal(components[0].amount, input.amount);
+    const postings = await db("account_entries").where({ transaction_entry_id: components[0].id }).orderBy("id");
+    assert.deepEqual(postings.map(p => [p.account_id, p.amount]), [[cash.id, input.amount], [equity.id, `-${input.amount}`]]);
+    assert.equal((await post({ ...input, credit: cash.id })).status, 400);
+    assert.equal((await post({ ...input, credit: accounts.find(a => a.type === "INCOME").id })).status, 400);
+    const other = await db("accounts").whereNot({ group_id: group.id }).first("id");
+    assert.equal((await post({ ...input, debit: other.id })).status, 404);
+    assert.equal((await post(input, "alpha")).status, 403);
+    await db("users").where({ id: actor.id }).update({ role: "AUDITOR" });
+    assert.equal((await post()).status, 403);
+    await db("users").where({ id: actor.id }).update({ role: "OWNER" });
+    const [nonmember] = await db("users").insert({ group_id: group.id, first_name: "Not", family_name: "Enrolled" }).returning("id");
+    assert.equal((await post({ ...input, user_id: nonmember.id })).status, 400);
+    await db("cycles").where({ id: cycle.id }).update({ status: "closed" });
+    assert.equal((await post({ ...input, amount: "0.01" })).status, 201);
+    const [groupCash, groupEquity] = await db("accounts").insert([
+      { group_id: group.id, code: "cash", name: "Group Cash", type: "ASSET" },
+      { group_id: group.id, code: "equity", name: "Group Equity", type: "EQUITY" },
+    ]).returning("id");
+    const groupPost = await post({ debit: groupCash.id, credit: groupEquity.id, amount: 500 });
+    assert.equal(groupPost.status, 201); assert.equal(groupPost.body.transaction.cycle_id, null);
+    assert.equal(groupPost.body.transaction.user_id, null);
+    // Explicit cycle and mixed group/cycle account directions preserve attribution.
+    for (const pair of [
+      { debit: cash.id, credit: equity.id },
+      { debit: groupCash.id, credit: equity.id },
+      { debit: cash.id, credit: groupEquity.id },
+      { debit: groupCash.id, credit: groupEquity.id },
+    ]) {
+      const explicit = await post({ ...pair, amount: "0.01", cycle_id: cycle.id, user_id: member.id });
+      assert.equal(explicit.status, 201);
+      assert.equal(explicit.body.transaction.cycle_id, cycle.id);
+      assert.equal(explicit.body.transaction.user_id, member.id);
+    }
+    const foreignUser = await db("users").whereNot({ group_id: group.id }).first("id");
+    assert.equal((await post({ ...input, user_id: foreignUser.id })).status, 404);
+    const foreignCycle = await db("cycles").whereNot({ group_id: group.id }).first("id");
+    assert.equal((await post({ debit: groupCash.id, credit: groupEquity.id, amount: "1.00", cycle_id: foreignCycle.id })).status, 404);
+    // A writer waits on locked authorization/reference rows and sees their committed changes.
+    const connection = knex({ client: "pg", connection: process.env.TEST_DATABASE_URL, pool: { min: 0, max: 1 } });
+    const concurrentHandler = serverless(createApp(connection, { getUser: async () => ({ id: authId }) }));
+    try {
+      const { rows: [{ pid }] } = await connection.raw("SELECT pg_backend_pid() AS pid");
+      for (const change of [
+        { table: "users", id: actor.id, value: { role: "AUDITOR" }, restore: { role: "OWNER" }, status: 403 },
+        { table: "accounts", id: cash.id, value: { type: "INCOME" }, restore: { type: "ASSET" }, status: 400 },
+      ]) {
+        const gate = await db.transaction();
+        let pending;
+        try {
+          await gate(change.table).where({ id: change.id }).update(change.value);
+          pending = concurrentHandler({ version: "2.0", rawPath: "/api/v1/transactions/equity", rawQueryString: "",
+            headers: { "content-type": "application/json", authorization: "Bearer token", "x-group-slug": "equity-posting" },
+            requestContext: { http: { method: "POST", sourceIp: "127.0.0.1" } },
+            body: JSON.stringify({ ...input, amount: "1.00" }), isBase64Encoded: false }, {});
+          await waitForLocks(gate, [pid]);
+          await gate.commit();
+          assert.equal((await pending).statusCode, change.status);
+        } finally {
+          if (!gate.isCompleted()) await gate.rollback();
+          if (pending) await pending;
+          await db(change.table).where({ id: change.id }).update(change.restore);
+        }
+      }
+    } finally { await connection.destroy(); }
+    const counts = async () => Promise.all(["transactions", "transaction_entries", "account_entries"].map(async table =>
+      (await db(table).where({ group_id: group.id }).count("* as count").first()).count));
+    const before = await counts();
+    await db.raw(`CREATE FUNCTION public.reject_test_equity_credit() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.amount < 0 THEN RAISE EXCEPTION 'Test posting rejection' USING ERRCODE='23514'; END IF; RETURN NEW; END $$;
+      CREATE TRIGGER test_equity_credit_failure BEFORE INSERT ON public.account_entries
+      FOR EACH ROW EXECUTE FUNCTION public.reject_test_equity_credit();`);
+    try {
+      const failed = await post({ ...input, amount: "12.34" });
+      assert.equal(failed.status, 409);
+      assert.doesNotMatch(failed.body.error, /Test posting rejection/);
+      assert.deepEqual(await counts(), before);
+      await db.raw(`DROP TRIGGER test_equity_credit_failure ON public.account_entries;
+        CREATE CONSTRAINT TRIGGER test_equity_credit_failure AFTER INSERT ON public.account_entries
+        DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.reject_test_equity_credit();`);
+      const commitFailure = await post({ ...input, amount: "12.34" });
+      assert.equal(commitFailure.status, 409);
+      assert.doesNotMatch(commitFailure.body.error, /Test posting rejection/);
+      assert.deepEqual(await counts(), before);
+
+    } finally {
+      await db.raw("DROP TRIGGER test_equity_credit_failure ON public.account_entries; DROP FUNCTION public.reject_test_equity_credit()");
+    }
+  });
   await t.test("GET cycle accounts returns seeded current chart with group RLS", async () => {
     const [accountGroup] = await db("groups").insert({ name: "Account listing", slug: "account-listing" }).returning("id");
     const accountAuthId = "77777777-7777-4777-8777-777777777777";

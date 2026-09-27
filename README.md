@@ -319,6 +319,38 @@ there is no second writable posting representation. Rollback of 019 retains all
 accounts. Rollback of 018 rejects cycle ownership or component data that the old
 schema cannot preserve; use a verified backup for incompatible downgrades.
 
+`POST /api/v1/transactions/equity` records an equity contribution. Supply a
+Bearer token and `x-group-slug`; only the group's OWNER, ADMIN or TREASURER can
+post. Use one account ID per side, not arrays:
+
+```json
+{
+  "debit": "101",
+  "credit": "106",
+  "amount": "500.00",
+  "user_id": "12",
+  "description": "Member capital contribution"
+}
+```
+
+`debit` must be an ASSET account and `credit` an EQUITY account in the selected
+group. The positive amount allows two decimal places; use decimal strings for
+exact large amounts; JSON numbers above 1,000,000,000,000 must be strings. IDs may be strings or safe positive integers. Optional fields
+are `user_id`, `cycle_id`, and `description` (up to 4000 characters).
+The cycle is inferred from the accounts unless supplied; cycle-owned accounts
+must match it. Cycle-less group accounts remain supported. A member requires
+membership in the specified or inferred cycle. Historical cycles are accepted.
+
+Returns HTTP 201 with `{success:true,transaction,entries,account_entries}` after
+commit. One EQUITY header and component accompany two postings: positive amount
+for the asset, negative for equity. All records commit or roll back together.
+Each successful request creates a new transaction; automatic duplicate-request
+detection and share quantities are not supported by this endpoint.
+
+Errors: 400 invalid input/types/membership; 401 unauthenticated; 403 unauthorized
+writer; 404 reference not found in the selected group; 409 database constraint
+or concurrent-write conflict. No new migration is needed beyond 018–021.
+
 `GET /api/v1/cycles/accounts` returns the selected group's current cycle accounts,
 ordered by code then ID. Supply `Authorization: Bearer <access_token>` and
 `x-group-slug`. The verified user must be an OWNER, ADMIN, TREASURER, or AUDITOR
