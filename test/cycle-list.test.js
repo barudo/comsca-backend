@@ -9,6 +9,7 @@ function fixture(t) {
   t.after(() => db.destroy());
   const authId = "11111111-1111-4111-8111-111111111111";
   const cycle = { name: "2026 to 2027", description: "Community savings and shared expenses",
+    receipt_counter: "9007199254740993", disbursement_voucher_counter: "12", journal_voucher_counter: "0",
     starting_subscription: "5000.00", maximum_monthly_shares: 10, absence_penalty: "0.00", required_monthly_contribution: "25.00", id: "20", group_id: "1", status: "draft", interest_rate: "2.500000",
     interest_period: "MONTHLY", interest_method: "COMPOUND", cost_per_share: "9999999999999999.99",
     created_at: "2026-09-20T00:00:00Z", updated_at: "2026-09-20T00:00:00Z" };

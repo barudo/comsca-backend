@@ -2,17 +2,18 @@ const cycleColumns = ["id", "group_id", "interest_rate", "interest_period", "int
   "cost_per_share", "status", "created_at", "updated_at"];
 const detailFields = ["name", "description", "absence_penalty", "required_monthly_contribution",
   "starting_subscription", "maximum_monthly_shares"];
-const allCycleColumns = [...cycleColumns, ...detailFields];
+const counterColumns = ["receipt_counter", "disbursement_voucher_counter", "journal_voucher_counter"];
+const allCycleColumns = [...cycleColumns, ...detailFields, ...counterColumns];
 
 function cycleInput(body, current) {
   const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
   if (!body || typeof body !== "object" || Array.isArray(body)) fail("A cycle object is required");
   const allowed = ["interest_rate", "interest_period", "interest_method", "cost_per_share", "status"];
-  allowed.push(...detailFields);
+  allowed.push(...detailFields, ...counterColumns);
   if (Object.keys(body).some(key => !allowed.includes(key))) fail("Unsupported cycle field");
   if (current) {
     if (!Object.keys(body).length) fail("At least one cycle field is required");
-    if (current.status !== "draft" && Object.keys(body).some(key => key !== "status")) {
+    if (current.status !== "draft" && Object.keys(body).some(key => key !== "status" && !counterColumns.includes(key))) {
       fail("Financial settings can only be updated on a draft cycle", 409);
     }
     body = { ...Object.fromEntries(allowed.map(key => [key, current[key]])), ...body };
@@ -44,6 +45,18 @@ function cycleInput(body, current) {
     cost_per_share: decimal("cost_per_share", 18, 2, true),
     status: body.status === undefined ? "draft" : body.status,
   };
+  for (const field of counterColumns) {
+    const value = body[field] === undefined ? "0" : body[field];
+    if (!["number", "string"].includes(typeof value) ||
+        (typeof value === "number" && !Number.isSafeInteger(value))) {
+      fail(`${field} must be a nonnegative integer; send large values as strings`);
+    }
+    const text = String(value);
+    if (!/^[0-9]{1,19}$/.test(text) || BigInt(text) > 9223372036854775807n) {
+      fail(`${field} must be between 0 and 9223372036854775807`);
+    }
+    values[field] = BigInt(text).toString();
+  }
   for (const field of ["name", "description"]) {
     const value = body[field] ?? null;
     if (value !== null && (typeof value !== "string" || value.includes("\u0000"))) {
@@ -156,12 +169,12 @@ class CyclesHandler {
           throw Object.assign(new Error("Closed cycles are read-only"), { status: 409 });
         }
         const values = cycleInput(request.body, current);
-        const hasFinancialFields = Object.keys(request.body).some(key => key !== "status");
+        const hasChanges = Object.keys(request.body).some(key => key !== "status");
         const nextStatus = { draft: "active", active: "distributing", distributing: "closed" }[current.status];
         if (values.status !== current.status && values.status !== nextStatus) {
           throw Object.assign(new Error("Invalid cycle status transition"), { status: 409 });
         }
-        if (!hasFinancialFields && values.status === current.status) return current;
+        if (!hasChanges && values.status === current.status) return current;
         const changes = Object.fromEntries(Object.keys(request.body).map(key => [key, values[key]]));
         const [updated] = await trx("cycles").where({ id, group_id: request.group.id })
           .update({ ...changes, updated_at: trx.raw("clock_timestamp()") }).returning(allCycleColumns);

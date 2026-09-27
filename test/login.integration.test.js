@@ -262,13 +262,16 @@ test("login and RLS isolate groups on a reused database connection", {
 
   await t.test("cycle document counters default, validate and roll back", async () => {
     const migration = require("../migrations/022_add_cycle_document_counters");
+    const counterRead = require("../migrations/024_allow_cycle_document_counters_read");
     const fields = ["receipt_counter", "disbursement_voucher_counter", "journal_voucher_counter"];
     const [cycle] = await db("cycles").insert({ group_id: groups[0].id, status: "closed" }).returning("*");
     for (const field of fields) assert.equal(cycle[field], "0");
+    await db.transaction(trx => counterRead.down(trx));
     await db.transaction(trx => migration.down(trx));
     for (const field of fields) assert.equal(await db.schema.hasColumn("cycles", field), false);
     const before = await db("cycles").where({ id: cycle.id }).first();
     await db.transaction(trx => migration.up(trx));
+    await db.transaction(trx => counterRead.up(trx));
     assert.deepEqual(await db("cycles").where({ id: cycle.id }).first(), {
       ...before, receipt_counter: "0", disbursement_voucher_counter: "0", journal_voucher_counter: "0",
     });
@@ -856,6 +859,47 @@ test("login and RLS isolate groups on a reused database connection", {
       await db.raw("DROP TRIGGER test_equity_credit_failure ON public.account_entries; DROP FUNCTION public.reject_test_equity_credit()");
     }
   });
+  await t.test("POST cycle members enrolls only group users in the current cycle", async () => {
+    const [memberGroup] = await db("groups").insert({ name: "Enrollment", slug: "enrollment" }).returning("id");
+    const enrollmentAuth = "99999999-9999-4999-8999-999999999999";
+    await db("auth.users").insert({ id: enrollmentAuth });
+    const [actor, first, second] = await db("users").insert([
+      { group_id: memberGroup.id, auth_user_id: enrollmentAuth, first_name: "Enroll", family_name: "Owner", role: "OWNER" },
+      { group_id: memberGroup.id, first_name: "First", family_name: "Member" },
+      { group_id: memberGroup.id, first_name: "Second", family_name: "Member" },
+    ]).returning("id");
+    const handler = serverless(createApp(db, { getUser: async () => ({ id: enrollmentAuth }) }));
+    const enroll = async users => {
+      const result = await handler({ version: "2.0", rawPath: "/api/v1/cycles/members", rawQueryString: "cycle_id=999",
+        headers: { "content-type": "application/json", authorization: "Bearer token", "x-group-slug": "enrollment" },
+        requestContext: { http: { method: "POST", sourceIp: "127.0.0.1" } }, body: JSON.stringify({ users }), isBase64Encoded: false }, {});
+      return { status: result.statusCode, body: JSON.parse(result.body) };
+    };
+    assert.equal((await enroll([first.id])).status, 409);
+    const [oldCycle] = await db("cycles").insert({ group_id: memberGroup.id, status: "closed" }).returning("id");
+    assert.equal((await enroll([first.id])).status, 409);
+    const [current] = await db("cycles").insert({ group_id: memberGroup.id }).returning("id");
+    const foreign = await db("users").whereNot({ group_id: memberGroup.id }).first("id");
+    assert.equal((await enroll([first.id, foreign.id])).status, 404);
+    assert.deepEqual(await db("cycle_members").where({ cycle_id: current.id }), []);
+    const initial = await enroll([first.id, first.id]);
+    assert.equal(initial.status, 200); assert.equal(initial.body.added_count, 1);
+    assert.equal(initial.body.current_cycle_id, current.id);
+    const saved = await db("cycle_members").where({ cycle_id: current.id, user_id: first.id }).first();
+    await db("users").where({ id: actor.id }).update({ role: "ADMIN" });
+    await db("cycles").where({ id: current.id }).update({ status: "active" });
+    assert.equal((await enroll([first.id, second.id])).body.added_count, 1);
+    assert.deepEqual(await db("cycle_members").where({ cycle_id: current.id, user_id: first.id }).first(), saved);
+    await db("cycles").where({ id: current.id }).update({ status: "distributing" });
+    assert.equal((await enroll([first.id, second.id])).body.added_count, 0);
+    assert.deepEqual(await db("cycle_members").where({ cycle_id: oldCycle.id }), []);
+    await db("users").where({ id: actor.id }).update({ role: "MEMBER" });
+    assert.equal((await enroll([actor.id])).status, 403);
+    await db("users").where({ id: actor.id }).update({ role: "OWNER" });
+    await db("cycles").where({ id: current.id }).update({ status: "closed" });
+    assert.equal((await enroll([actor.id])).status, 409);
+    assert.equal((await db("cycle_members").where({ cycle_id: current.id })).length, 2);
+  });
   await t.test("GET cycle accounts returns seeded current chart with group RLS", async () => {
     const [accountGroup] = await db("groups").insert({ name: "Account listing", slug: "account-listing" }).returning("id");
     const accountAuthId = "77777777-7777-4777-8777-777777777777";
@@ -933,6 +977,7 @@ test("login and RLS isolate groups on a reused database connection", {
       { group_id: listGroup.id, status: "closed", created_at: "2026-10-01T00:00:00Z" },
       { group_id: listGroup.id, status: "closed", created_at: "2026-10-01T00:00:00Z" },
     ]).returning("id");
+    await db("cycles").where({ id: current.id }).update({ receipt_counter: "9007199254740993", disbursement_voucher_counter: "12" });
     for (const role of ["OWNER", "ADMIN"]) {
       await db("users").where({ id: actor.id }).update({ role });
       for (const route of ["/api/v1/cycles"]) {
@@ -943,9 +988,10 @@ test("login and RLS isolate groups on a reused database connection", {
         assert.equal(result.body.cycles.every(row => row.group_id === listGroup.id), true);
         assert.equal(result.body.cycles[0].cost_per_share, "9999999999999999.99");
         const saved = await db("cycles").where({ group_id: listGroup.id }).whereNot({ status: "closed" }).orderBy("created_at", "desc").orderBy("id", "desc");
-        // Internal document counters are deliberately not exposed by the cycle API.
-        const publicCycles = saved.map(({ receipt_counter, disbursement_voucher_counter, journal_voucher_counter, ...cycle }) => cycle);
-        assert.deepEqual(result.body.cycles, JSON.parse(JSON.stringify(publicCycles)));
+        assert.deepEqual(result.body.cycles, JSON.parse(JSON.stringify(saved)));
+        assert.equal(result.body.cycles[0].receipt_counter, "9007199254740993");
+        assert.equal(result.body.cycles[0].disbursement_voucher_counter, "12");
+        assert.equal(result.body.cycles[0].journal_voucher_counter, "0");
       }
     }
     for (const status of ["active", "distributing", "closed"]) {

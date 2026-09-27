@@ -49,7 +49,7 @@ function fixture(t) {
     assert.deepEqual(query.returning, ["id", "group_id", "interest_rate", "interest_period", "interest_method",
       "cost_per_share", "status", "created_at", "updated_at",
       "name", "description", "absence_penalty", "required_monthly_contribution",
-      "starting_subscription", "maximum_monthly_shares"]);
+      "starting_subscription", "maximum_monthly_shares", "receipt_counter", "disbursement_voucher_counter", "journal_voucher_counter"]);
     return [{ id: 20, ...values, created_at: "2026-09-20T00:00:00.000Z", updated_at: "2026-09-20T00:00:00.000Z" }];
   } });
   const handler = serverless(createApp(db, { getUser: async () => {
@@ -71,7 +71,7 @@ function fixture(t) {
     patch: (body, options) => send("PATCH", body, options) };
 }
 
-const emptyCreationFields = { name: null, description: null, absence_penalty: null, required_monthly_contribution: null, starting_subscription: null, maximum_monthly_shares: null };
+const emptyCreationFields = { receipt_counter: "0", disbursement_voucher_counter: "0", journal_voucher_counter: "0", name: null, description: null, absence_penalty: null, required_monthly_contribution: null, starting_subscription: null, maximum_monthly_shares: null };
 
 const terms = { interest_rate: "2.500000", interest_period: "MONTHLY", interest_method: "COMPOUND", cost_per_share: "100.00" };
 
@@ -394,5 +394,36 @@ test("PUT validates new fields and permits explicitly clearing nullable settings
   assert.equal(state.updates.length, 0);
   assert.equal((await put({ starting_subscription: "0.00", maximum_monthly_shares: 2147483647 })).status, 200);
   assert.equal((await put(emptyCreationFields)).status, 200);
-  for (const key of Object.keys(emptyCreationFields)) assert.equal(state.cycle[key], null);
+  for (const [key, value] of Object.entries(emptyCreationFields)) assert.equal(state.cycle[key], value);
+});
+
+
+test("cycle creation and updates accept exact document counters", async t => {
+  const { post, put, state } = fixture(t);
+  const counters = { receipt_counter: "9007199254740993", disbursement_voucher_counter: 12, journal_voucher_counter: 0 };
+  const created = await post(counters);
+  assert.equal(created.status, 201);
+  assert.equal(created.body.cycle.receipt_counter, "9007199254740993");
+  assert.equal(created.body.cycle.disbursement_voucher_counter, "12");
+  assert.equal(created.body.cycle.journal_voucher_counter, "0");
+  for (const status of ["draft", "active", "distributing"]) {
+    state.cycle.status = status;
+    assert.equal((await put(counters)).status, 200);
+    assert.equal((await put({ receipt_counter: "9223372036854775807" })).body.cycle.disbursement_voucher_counter, "12");
+    assert.equal(state.cycle.receipt_counter, "9223372036854775807");
+  }
+  state.cycle.status = "closed";
+  assert.equal((await put(counters)).status, 409);
+});
+
+test("cycle counters reject invalid values without writing", async t => {
+  const { post, put, state } = fixture(t);
+  for (const field of ["receipt_counter", "disbursement_voucher_counter", "journal_voucher_counter"]) {
+    for (const value of [null, -1, 1.5, "-1", "1.0", "1e3", "", "9223372036854775808", 9007199254740992, {}, [], true]) {
+      assert.equal((await post({ [field]: value })).status, 400);
+      assert.equal((await put({ [field]: value })).status, 400);
+    }
+  }
+  assert.equal(state.inserts.length, 0);
+  assert.equal(state.updates.length, 0);
 });

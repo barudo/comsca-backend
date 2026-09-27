@@ -351,6 +351,29 @@ Errors: 400 invalid input/types/membership; 401 unauthenticated; 403 unauthorize
 writer; 404 reference not found in the selected group; 409 database constraint
 or concurrent-write conflict. No new migration is needed beyond 018–021.
 
+`POST /api/v1/cycles/members` enrolls users into the selected group's current
+cycle (draft, active, or distributing). Requires a Bearer token, `x-group-slug`,
+and an OWNER or ADMIN profile in that group.
+
+```json
+{ "users": ["12", "13"] }
+```
+
+Accepts 1–1000 positive user IDs as strings or safe JSON integers. Every user must
+belong to the selected group; unavailable/foreign users reject the entire batch.
+Duplicates and existing memberships are ignored, preserving enrollment timestamps.
+No cycle ID is supplied: the server resolves and locks the current cycle. Returns
+HTTP 200 after commit, including on retries:
+
+```json
+{ "success": true, "current_cycle_id": "20", "users": ["12", "13"], "added_count": 2 }
+```
+
+`users` contains the deduplicated requested IDs; `added_count` counts new rows only.
+Malformed input is 400, unauthenticated requests 401, unauthorized callers 403,
+unavailable users 404, and missing current cycle/concurrent-write conflicts 409.
+Historical cycle memberships are unchanged. No migration is required.
+
 `GET /api/v1/cycles/accounts` returns the selected group's current cycle accounts,
 ordered by code then ID. Supply `Authorization: Bearer <access_token>` and
 `x-group-slug`. The verified user must be an OWNER, ADMIN, TREASURER, or AUDITOR
@@ -394,7 +417,15 @@ Migration `022_add_cycle_document_counters.js` adds `receipt_counter`,
 `disbursement_voucher_counter`, and `journal_voucher_counter` to cycles. Each is
 a nonnegative, non-null bigint defaulting to zero for existing and new cycles.
 The value represents the last allocated document number (zero means none).
-These internal counters are not exposed or editable through the cycle API.
+Migration `024_allow_cycle_document_counters_read.js` grants the restricted reader
+access to these counters. `GET /api/v1/cycles` includes all three on each returned
+cycle as decimal strings (for example `"receipt_counter":"12"`), preserving bigint
+precision. OWNER/ADMIN callers may supply counters in `POST /api/v1/cycles` and
+`PUT /api/v1/cycles/:id` (also PATCH). Omitted creation counters default to zero;
+omitted update counters retain their values. Counters accept nonnegative integers
+through 9223372036854775807; use strings above the safe JSON integer range.
+Counters may be edited in draft, active, or distributing cycles; closed cycles
+remain read-only. Setting counters does not itself issue or renumber documents.
 This migration does not allocate numbers or add document fields to transactions.
 Future allocation should increment the relevant counter atomically in the same
 database transaction as the numbered document. Rollback removes all three counters
