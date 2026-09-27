@@ -3,16 +3,28 @@ const assert = require('node:assert/strict');
 const knex = require('knex');
 const migration = require('../migrations/018_scope_account_ledger');
 const seed = require('../migrations/019_seed_cycle_accounts');
+const validation = require('../migrations/021_validate_account_entries_after_changes');
+
+async function applyLedger(trx) {
+  await migration.up(trx);
+  await validation.up(trx);
+}
 
 test('account ledger conversion, activation, concurrency and guarded rollback', { skip: !process.env.TEST_DATABASE_URL }, async t => {
   // The supplied URL must be a dedicated disposable PostgreSQL instance.
   // A separate database avoids clobbering the main integration suite's fixtures.
   const admin = knex({ client: 'pg', connection: process.env.TEST_DATABASE_URL });
   const name = `ledger_migration_${process.pid}_${Date.now()}`;
+  let created = false;
+  let db;
+  t.after(async () => {
+    try { if (db) await db.destroy(); if (created) await admin.raw('DROP DATABASE ??', [name]); }
+    finally { await admin.destroy(); }
+  });
   await admin.raw('CREATE DATABASE ??', [name]);
+  created = true;
   const url = new URL(process.env.TEST_DATABASE_URL); url.pathname = `/${name}`;
-  const db = knex({ client: 'pg', connection: url.toString(), pool: { min: 0, max: 5 } });
-  t.after(async () => { await db.destroy(); await admin.raw('DROP DATABASE ??', [name]); await admin.destroy(); });
+  db = knex({ client: 'pg', connection: url.toString(), pool: { min: 0, max: 5 } });
   // Minimal faithful accounting dependencies avoid cluster-wide authentication roles.
   await db.raw(`CREATE TABLE groups(id bigserial PRIMARY KEY);
     CREATE TABLE cycles(id bigserial PRIMARY KEY,group_id bigint REFERENCES groups(id),status text NOT NULL DEFAULT 'draft', UNIQUE(group_id,id));
@@ -33,19 +45,46 @@ test('account ledger conversion, activation, concurrency and guarded rollback', 
       {group_id:group.id,transaction_id:header.id,account_id:cash.id,credit:'1000.00',description:'Cash credit'},
     ]); return header;
   });
+  const [secondClosed] = await db('cycles').insert({group_id:group.id,status:'closed'}).returning('id');
+  await legacyPost(secondClosed.id);
   const history = await legacyPost(closed.id);
   const grouplessCycle = await legacyPost(null);
   const oldPostings = await db('transaction_entries').orderBy('id');
   await db('transactions').where({id:history.id}).update({amount:'999.00'});
-  await assert.rejects(db.transaction(trx => migration.up(trx)), /Legacy header\/ledger mismatch/);
+  await assert.rejects(db.transaction(trx => applyLedger(trx)), /Legacy header\/ledger mismatch/);
   assert.equal(await db.schema.hasTable('account_entries'),false);
   assert.deepEqual(await db('transaction_entries').orderBy('id'),oldPostings);
   await db('transactions').where({id:history.id}).update({amount:'1000.00'});
-  await db.transaction(trx => migration.up(trx));
+  await db.transaction(trx => applyLedger(trx));
   const converted = await db('account_entries').orderBy('id');
+  // Immediate constraints must inspect the state after a posting mutation.
+  await assert.rejects(db.transaction(async trx => {
+    await trx.raw('SET CONSTRAINTS ALL IMMEDIATE');
+    await trx('account_entries').where({id:converted[0].id}).del();
+  }), {code:'23514'});
+  assert.deepEqual(await db('account_entries').orderBy('id'), converted);
+  for (const amount of ['0.00', 'NaN']) {
+    await assert.rejects(db('account_entries').where({id:converted[0].id}).update({amount}), {code:'23514'});
+  }
+
   assert.deepEqual(converted.map(p => [p.id,p.amount,p.description,p.created_at,p.updated_at]),oldPostings.map(p => [p.id,p.debit==='0.00'?`-${p.credit}`:p.debit,p.description,p.created_at,p.updated_at]));
   const component = await db('transaction_entries').where({transaction_id:history.id});
   assert.equal(component.length,1); assert.equal(component[0].type,'LOAN_DISBURSEMENT');
+  // Every historical posting keeps its definition while each cycle gets a distinct account.
+  for (const posting of converted) {
+    const old = oldPostings.find(p => p.id === posting.id);
+    const original = [cash, loans].find(a => a.id === old.account_id);
+    const header = await db('transactions').where({id:old.transaction_id}).first();
+    const account = await db('accounts').where({id:posting.account_id}).first();
+    assert.equal(account.cycle_id, header.cycle_id);
+    for (const field of ['code','name','type','description']) assert.equal(account[field], original[field]);
+    if (header.cycle_id) assert.notEqual(account.id, original.id);
+    else assert.equal(account.id, original.id);
+  }
+  for (const amount of ['0.00', '-1.00']) {
+    await assert.rejects(db('transaction_entries').where({id:component[0].id}).update({amount}), {code:'23514'});
+  }
+
   const closedAccounts = await db('accounts').where({cycle_id:closed.id}).orderBy('id');
   assert.equal(closedAccounts.length,2);
   assert.equal((await db('accounts').whereNull('cycle_id')).length,2);
@@ -62,7 +101,7 @@ test('account ledger conversion, activation, concurrency and guarded rollback', 
   assert.equal(chart.length,11);
   await db('cycles').where({id:draft.id}).update({status:'active'});
   assert.deepEqual(await db('accounts').where({cycle_id:draft.id}).orderBy('id'),chart);
-  assert.equal((await db('account_entries')).length,4);
+  assert.equal((await db('account_entries')).length,oldPostings.length);
   const [bad] = await db('cycles').insert({group_id:group.id}).returning('*');
   await db('accounts').insert({group_id:group.id,cycle_id:bad.id,code:'1000',name:'Custom cash',type:'ASSET'});
   await assert.rejects(db('cycles').where({id:bad.id}).update({status:'active'}),{code:'23514'});
@@ -93,7 +132,7 @@ test('account ledger conversion, activation, concurrency and guarded rollback', 
     const outcome = assert.rejects(second.executionPromise,{code:'23514'});
     await second.commit(); await outcome;
   } finally { if(!first.isCompleted())await first.rollback(); if(!second.isCompleted())await second.rollback(); }
-  assert.equal((await db('account_entries').where({id:converted[1].id}).first()).amount,'-1000.00');
+  assert.equal((await db('account_entries').where({transaction_entry_id:component[0].id}).where('amount','<',0).first()).amount,'-1000.00');
   await db.transaction(trx => seed.down(trx));
   assert.equal((await db('accounts').where({cycle_id:draft.id})).length,11);
   await assert.rejects(db.transaction(trx => migration.down(trx)),/lose account cycle ownership/);
@@ -108,17 +147,27 @@ test('account ledger conversion, activation, concurrency and guarded rollback', 
       {group_id:group.id,code:'cash',name:'Cash',type:'ASSET'},
       {group_id:group.id,code:'expense',name:'Expense',type:'EXPENSE'},
     ]).returning('id');
-    const [header] = await trx('transactions').insert({group_id:group.id,type:'EXPENSE',amount:'10.00',created_at:'2026-01-01T00:00:00Z',updated_at:'2026-01-01T00:00:00Z'}).returning('*');
+    const [header] = await trx('transactions').insert({group_id:group.id,type:'EXPENSE',amount:'9999999999999999.99',created_at:'2026-01-01T00:00:00Z',updated_at:'2026-01-01T00:00:00Z'}).returning('*');
     const [c] = await trx('transaction_entries').insert({group_id:group.id,transaction_id:header.id,type:header.type,amount:header.amount,created_at:header.created_at,updated_at:header.updated_at}).returning('*');
-    await trx('account_entries').insert(accounts.map((a,i)=>({group_id:group.id,transaction_entry_id:c.id,account_id:a.id,amount:i===0?'-10.00':'10.00',description:'Round trip'})));
+    await trx('account_entries').insert(accounts.map((a,i)=>({group_id:group.id,transaction_entry_id:c.id,account_id:a.id,amount:i===0?`-${header.amount}`:header.amount,description:'Round trip'})));
     await trx('transactions').where({id:header.id}).update({updated_at:header.updated_at});
     return header;
   });
   const roundTrip = await db('account_entries').orderBy('id');
+  // With no cycle accounts, the separate component-data rollback guard is reachable.
+  const aggregate = await db('transaction_entries').where({transaction_id:restoredHeader.id}).first();
+  await db('transaction_entries').where({id:aggregate.id}).update({description:'Distinct business metadata'});
+  const guarded = await db('transaction_entries').orderBy('id');
+  await assert.rejects(db.transaction(trx => migration.down(trx)), /lose business component data/);
+  assert.deepEqual(await db('transaction_entries').orderBy('id'), guarded);
+  assert.deepEqual(await db('account_entries').orderBy('id'), roundTrip);
+  await db('transaction_entries').where({id:aggregate.id}).update({description:aggregate.description});
+  await db('transactions').where({id:restoredHeader.id}).update({updated_at:restoredHeader.updated_at});
+
   await db.transaction(trx => migration.down(trx));
   assert.deepEqual(await db('transactions').where({id:restoredHeader.id}).first(),restoredHeader);
   assert.deepEqual((await db('transaction_entries').orderBy('id')).map(p=>[p.id,p.debit,p.credit,p.description]),roundTrip.map(p=>[p.id,p.amount[0]==='-'?'0.00':p.amount,p.amount[0]==='-'?p.amount.slice(1):'0.00',p.description]));
   assert.equal(await db.schema.hasColumn('transaction_entries','debit'),true);
-  await db.transaction(trx => migration.up(trx));
+  await db.transaction(trx => applyLedger(trx));
   assert.equal(await db.schema.hasColumn('transaction_entries','account_id'),false);
 });

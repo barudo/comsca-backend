@@ -2,7 +2,7 @@
 title: 'Cycle chart of accounts and separate accounting postings'
 type: 'feature'
 created: '2026-09-27'
-status: 'in-review'
+status: 'done'
 baseline_commit: '06b125d8e753d3c50697559bd1785abec38aed1f'
 route: 'dispatch'
 review_loop_iteration: 0
@@ -41,7 +41,11 @@ On activation, create this proposed basic chart with zero opening balances:
 
 Seed atomically and without duplicates or balance carryover. Reject incompatible reserved-code definitions instead of overwriting custom data. Backfill active/distributing cycles only; retain closed history.
 
-**Never:** Duplicate writable postings, edit applied migrations, deploy, migrate the configured remote database, or add API/frontend features. Automatic transaction-type posting rules remain outside scope.
+**Never:** Duplicate writable postings, edit applied migrations, deploy, migrate the configured remote database, or add frontend or posting API features. The user subsequently authorized the read-only cycle accounts endpoint below. Automatic transaction-type posting rules remain outside scope.
+
+## Authorized Account Listing Extension
+
+The user requested `GET /api/v1/cycles/accounts` during implementation. Return definitions for the selected group's current (draft/active/distributing) cycle, excluding closed-cycle and cycle-less accounts. Resolve the group from `x-group-slug` and authenticate a bearer token. Allow OWNER, ADMIN, TREASURER and AUDITOR roles within that group; deny MEMBER and cross-group access. Return `{success:true,current_cycle_id,accounts}` ordered by code/ID, or null cycle and an empty list if no current cycle exists. Drafts return whatever accounts exist, normally none until activation. Query parameters cannot override group/cycle selection. Use restricted-reader RLS and no-store responses.
 
 ## I/O & Edge-Case Matrix
 
@@ -71,6 +75,8 @@ Seed atomically and without duplicates or balance carryover. Reject incompatible
 - [x] `migrations/019_seed_cycle_accounts.js` — add activation trigger and active/distributing backfill; rollback removes machinery without deleting history.
 - [x] `test/login.integration.test.js` — cover totals, scope, optionality, activation, repeats and failures.
 - [x] `test/account-ledger-migration.integration.test.js` — verify legacy conversion, preflight failures and rollback safety on a disposable database.
+- [x] `src/handlers/cycle-accounts.js`, `src/routes/index.js`, `migrations/020_allow_cycle_accounts_read.js`, `test/cycle-accounts.test.js` — current-cycle account read endpoint and isolation.
+- [x] `migrations/021_validate_account_entries_after_changes.js` — enforce ledger validation after child mutation under immediate constraints.
 - [x] `README.md` — document chart, activation, new tables, compatibility and posting examples.
 
 **Acceptance Criteria:**
@@ -81,6 +87,12 @@ Seed atomically and without duplicates or balance carryover. Reject incompatible
 
 ## Implementation Notes
 
+- User committed the initial migrations as f7bd6bb during work. Preserve those migration files; validation correction is additive migration 021.
+- Added `src/handlers/cycle-accounts.js`, route registration, migration 020 account-read grants/policy, request tests and real PostgreSQL endpoint tests.
+- Review found an immediate-constraint defect in BEFORE child triggers. Migration 021 uses AFTER triggers; regression verifies immediate deletion is rejected.
+- Final full suite with migrations through 021 on a fresh disposable PostgreSQL 18 instance: 84/84 passed, zero failures/skips. Additional tests cover exact maximum decimal amounts and account mappings across historical cycles. Temporary containers were removed.
+- Automated verification-gap reviewer could not run due to its usage limit. Remaining review was completed locally; blind and edge-case reviewers returned results.
+
 - Implemented migrations 018/019, signed postings, activation seeding, historical conversion and guarded rollback.
 - Full suite passed on disposable PostgreSQL 18: 80 tests passed, zero failures/skips. Matrix scenarios covered by the accounting tests and migration integration test.
 - Historical integration fixtures now cap their legacy migration phase at 013; remaining checks apply the full migration chain. Cycle-list expectations now match the existing current-cycle API.
@@ -88,6 +100,19 @@ Seed atomically and without duplicates or balance carryover. Reject incompatible
 ## Spec Change Log
 
 ## Review Triage Log
+
+| Finding | Verdict and evidence | Resolution |
+|---|---|---|
+| BEFORE trigger validates stale child state under IMMEDIATE constraints | High: the header check runs before DELETE, allowing an unbalanced committed ledger. | Patched with AFTER triggers in additive 021 and failing-delete regression. |
+| Repeated validation can be quadratic for large transactions | Low: repeated trigger queues rescan components; ordinary payment sizes are small and no bulk import is requested. | No queue-consolidation complexity added. |
+| Concurrency test is not two balanced rewrites or concurrent cycle reassignment | Low: existing test proves parent locking and rejected invalid commit; parent-scope rejection has separate coverage. | Additional interleavings not required for this bounded change. |
+| Component-data rollback guard untested | Medium: cycle guard previously masked that branch. | Added cycle-less metadata rejection and unchanged-row assertions. |
+| Legacy account remapping not directly checked | Medium: previous assertions omitted account identity. | Added exact code/name/type/description mapping for every posting, including one source used by multiple cycles. |
+| Posting numeric constraints lack boundaries | Medium: new signed posting shape needs independent checks. | Added zero/NaN posting and nonpositive component rejection; populated roundtrip uses maximum exact decimal amount. |
+| README implies all backfilled balances start at zero | Low: historical postings survive for existing accounts. | Clarified only newly created accounts start empty. |
+| Database test cleanup registered too late | Low: setup failure could leave the admin pool open. | Registered cleanup before CREATE DATABASE and track creation. |
+
+Edge-case reviewer returned no findings. Verification-gap reviewer failed from a usage limit; local audit covered endpoint authorization, RLS, current-cycle selection, migration mapping and constraints.
 
 ## Design Notes
 

@@ -668,6 +668,63 @@ test("login and RLS isolate groups on a reused database connection", {
       await Promise.all(connections.map(connection => connection.destroy()));
     }
   });
+  await t.test("GET cycle accounts returns seeded current chart with group RLS", async () => {
+    const [accountGroup] = await db("groups").insert({ name: "Account listing", slug: "account-listing" }).returning("id");
+    const accountAuthId = "77777777-7777-4777-8777-777777777777";
+    await db("auth.users").insert({ id: accountAuthId });
+    const [actor] = await db("users").insert({ auth_user_id: accountAuthId, group_id: accountGroup.id,
+      first_name: "Account", family_name: "Owner", role: "OWNER" }).returning("id");
+    const handler = serverless(createApp(db, { getUser: async () => ({ id: accountAuthId }) }));
+    const get = async (slug = "account-listing") => {
+      const result = await handler({ version: "2.0", rawPath: "/api/v1/cycles/accounts",
+        rawQueryString: `group_id=${groups[0].id}&cycle_id=999`,
+        headers: { authorization: "Bearer token", "x-group-slug": slug },
+        requestContext: { http: { method: "GET", sourceIp: "127.0.0.1" } } }, {});
+      return { status: result.statusCode, body: JSON.parse(result.body) };
+    };
+    assert.deepEqual((await get()).body, { success: true, current_cycle_id: null, accounts: [] });
+    const [cycle] = await db("cycles").insert({ group_id: accountGroup.id }).returning("id");
+    assert.deepEqual((await get()).body, { success: true, current_cycle_id: cycle.id, accounts: [] });
+    await db("cycles").where({ id: cycle.id }).update({ status: "active" });
+    const expected = JSON.parse(JSON.stringify(await db("accounts").where({ group_id: accountGroup.id, cycle_id: cycle.id }).orderBy("code").orderBy("id")));
+    assert.equal(expected.length, 11);
+    assert.equal(expected.find(a => a.code === "4300").type, "INCOME");
+    for (const role of ["OWNER", "ADMIN", "TREASURER", "AUDITOR"]) {
+      await db("users").where({ id: actor.id }).update({ role });
+      assert.deepEqual(await get(), { status: 200, body: { success: true, current_cycle_id: cycle.id, accounts: expected } });
+    }
+    assert.equal((await get("alpha")).status, 403);
+    await db("users").where({ id: actor.id }).update({ role: "MEMBER" });
+    assert.equal((await get()).status, 403);
+    await db("users").where({ id: actor.id }).update({ role: "OWNER" });
+    await db("cycles").where({ id: cycle.id }).update({ status: "closed" });
+    assert.deepEqual((await get()).body, { success: true, current_cycle_id: null, accounts: [] });
+    const [nextCycle] = await db("cycles").insert({ group_id: accountGroup.id }).returning("id");
+    await db("cycles").where({ id: nextCycle.id }).update({ status: "active" });
+    const next = await get();
+    assert.equal(next.body.accounts.length, 11);
+    assert.ok(next.body.accounts.every(a => a.cycle_id === nextCycle.id && !expected.some(old => old.id === a.id)));
+    assert.deepEqual(JSON.parse(JSON.stringify(await db("accounts").where({ cycle_id: cycle.id }).orderBy("code").orderBy("id"))), expected);
+    await db.transaction(async trx => {
+      await trx.raw("SET LOCAL ROLE comsca_group_reader");
+      await trx.raw("SELECT set_config('app.group_id', ?, true)", [String(accountGroup.id)]);
+      const visible = await trx("accounts").select("id", "group_id");
+      assert.equal(visible.length, 22);
+      assert.ok(visible.every(a => a.group_id === accountGroup.id));
+    });
+    await db.transaction(async trx => {
+      await trx.raw("SET LOCAL ROLE comsca_group_reader");
+      assert.deepEqual(await trx("accounts").select("id"), []);
+    });
+    const readMigration = require("../migrations/020_allow_cycle_accounts_read");
+    await db.transaction(trx => readMigration.down(trx));
+    await assert.rejects(db.transaction(async trx => {
+      await trx.raw("SET LOCAL ROLE comsca_group_reader");
+      await trx("accounts").select("id");
+    }), { code: "42501" });
+    await db.transaction(trx => readMigration.up(trx));
+    assert.equal((await get()).status, 200);
+  });
   await t.test("GET cycles uses RLS, identifies current independently of ordering, and restores grants", async () => {
     const [listGroup] = await db("groups").insert({ name: "Cycle listing", slug: "cycle-listing" }).returning("id");
     const listAuthId = "66666666-6666-4666-8666-666666666666";

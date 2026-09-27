@@ -2,6 +2,7 @@ const express = require("express");
 const authenticate = require("../middleware/authenticate");
 const groupSlugMiddleware = require("../middleware/group-slug");
 const CyclesHandler = require("../handlers/cycles");
+const CycleAccountsHandler = require("../handlers/cycle-accounts");
 const GroupUsersHandler = require("../handlers/group-users");
 const GroupUserListHandler = require("../handlers/group-user-list");
 const GroupUserAccountsHandler = require("../handlers/group-user-accounts");
@@ -15,6 +16,7 @@ const SupabaseAuthHandler = require("../handlers/supabase-auth");
 function createRouter(database) {
   const router = express.Router();
   const cycles = new CyclesHandler();
+  const cycleAccounts = new CycleAccountsHandler();
   const groupUsers = new GroupUsersHandler();
   const groupUserList = new GroupUserListHandler();
   const groupUserAccounts = new GroupUserAccountsHandler();
@@ -61,6 +63,7 @@ function createRouter(database) {
   router.put("/api/v1/users/me", authenticate, users.update.bind(users));
   router.put("/api/v1/users/me/password", authenticate, users.password.bind(users));
   router.get("/api/v1/cycles", authenticate, cycles.list.bind(cycles));
+  router.get("/api/v1/cycles/accounts", authenticate, cycleAccounts.list.bind(cycleAccounts));
   router.post("/api/v1/cycles", authenticate, cycles.create.bind(cycles));
   router.put("/api/v1/cycles/:id", authenticate, cycles.update.bind(cycles));
   router.patch("/api/v1/cycles/:id", authenticate, cycles.update.bind(cycles));

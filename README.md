@@ -265,6 +265,8 @@ and timestamps. Read member breakdowns by joining these two tables, without acco
 `account_entries` link a component to an account with a signed `amount`: positive
 is debit, negative is credit. Money uses `numeric(18,2)` throughout.
 
+Migration `021_validate_account_entries_after_changes.js` makes child-trigger validation run after mutations, including when constraints are explicitly set to immediate.
+
 Save headers, components and postings in one database transaction. Deferred checks
 require component amounts to sum to the header, and each component's debit and
 credit totals to equal its amount. Parent writes serialize competing changes;
@@ -273,10 +275,10 @@ foreign keys remain enforced. Historical cycles are valid; group operations may
 omit both member and cycle. A cycle account only accepts its own cycle's postings;
 nullable-cycle group accounts accept group or cycle activity. Account group/cycle
 ownership is immutable, and account codes are unique within their group/cycle scope.
-All three ledger tables and accounts enable RLS without public API policies.
+All ledger tables enable RLS. Migration `020_allow_cycle_accounts_read.js` grants group-scoped account reads to the restricted backend reader role; it grants no access to ledger postings.
 
 Activating a cycle atomically creates the following chart, also backfilled for
-existing active/distributing cycles. Accounts start with zero balances; closed
+existing active/distributing cycles. Newly created accounts start with zero balances; existing backfilled accounts retain their postings. Closed
 history is retained without a new chart or balance carryover. Repeated activation
 preserves existing accounts; incompatible reserved names/types abort activation.
 
@@ -316,6 +318,34 @@ switch from the old debit/credit entry shape when applying these migrations;
 there is no second writable posting representation. Rollback of 019 retains all
 accounts. Rollback of 018 rejects cycle ownership or component data that the old
 schema cannot preserve; use a verified backup for incompatible downgrades.
+
+`GET /api/v1/cycles/accounts` returns the selected group's current cycle accounts,
+ordered by code then ID. Supply `Authorization: Bearer <access_token>` and
+`x-group-slug`. The verified user must be an OWNER, ADMIN, TREASURER, or AUDITOR
+of that group. Group/cycle query parameters cannot override the scope.
+
+```json
+{
+  "success": true,
+  "current_cycle_id": "20",
+  "accounts": [
+    {
+      "id": "100", "group_id": "1", "cycle_id": "20",
+      "code": "1000", "name": "Cash", "type": "ASSET",
+      "description": null,
+      "created_at": "2026-09-27T00:00:00.000Z",
+      "updated_at": "2026-09-27T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+Current means draft, active, or distributing, as elsewhere in the API. Without a
+current cycle the response is `{"success":true,"current_cycle_id":null,"accounts":[]}`.
+A newly created draft has no basic accounts until activation. Historical-cycle
+and cycle-less group accounts are excluded. This endpoint returns definitions,
+not calculated balances. Responses are not cacheable. Missing authentication is
+401; an unauthorized role or membership is 403.
 
 Migration `007_add_cycle_financial_settings.js` stores financial terms on each
 cycle, so different cycles can use different terms:
