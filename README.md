@@ -326,37 +326,64 @@ there is no second writable posting representation. Rollback of 019 retains all
 accounts. Rollback of 018 rejects cycle ownership or component data that the old
 schema cannot preserve; use a verified backup for incompatible downgrades.
 
-`POST /api/v1/transactions/equity` records an equity contribution. Supply a
-Bearer token and `x-group-slug`; only the group's OWNER, ADMIN or TREASURER can
-post. Use one account ID per side, not arrays:
+`POST /api/v1/transactions/payments` replaces the equity endpoint and records a
+member payment. Supply a Bearer token and `x-group-slug`; only the group's OWNER,
+ADMIN or TREASURER can post. The frontend supplies the member's `user_id` and
+one or more entries with selected account IDs:
 
 ```json
 {
-  "debit": "101",
-  "credit": "106",
-  "amount": "500.00",
   "user_id": "12",
-  "description": "Member capital contribution"
+  "cycle_id": "7",
+  "description": "Monthly payment",
+  "entries": [
+    { "type": "LOAN_PAYMENT", "debit": "101", "credit": "102", "amount": "600.00" },
+    { "type": "BUY_SHARE", "debit": "101", "credit": "106", "amount": "300.00" },
+    { "type": "PENALTY_PAYMENT", "debit": "101", "credit": "104", "amount": "100.00" }
+  ]
 }
 ```
 
-`debit` must be an ASSET account and `credit` an EQUITY account in the selected
-group. The positive amount allows two decimal places; use decimal strings for
-exact large amounts; JSON numbers above 1,000,000,000,000 must be strings. IDs may be strings or safe positive integers. Optional fields
-are `user_id`, `cycle_id`, and `description` (up to 4000 characters).
-The cycle is inferred from the accounts unless supplied; cycle-owned accounts
-must match it. Cycle-less group accounts remain supported. A member requires
-membership in the specified or inferred cycle. Historical cycles are accepted.
+Replace sample IDs with accounts from `GET /api/v1/cycles/accounts`. Each entry
+requires `type`, `debit`, `credit`, and a positive `amount`; its optional
+`description` may contain up to 4000 characters. There must be 1–100 entries,
+and the entire JSON body must fit the API's 32 KiB limit (otherwise HTTP 413).
+The debit must be an ASSET account, different from the credit account.
+Credit account rules are:
 
-Returns HTTP 201 with `{success:true,transaction,entries,account_entries}` after
-commit. One EQUITY header and component accompany two postings: positive amount
-for the asset, negative for equity. All records commit or roll back together.
-Each successful request creates a new transaction; automatic duplicate-request
-detection and share quantities are not supported by this endpoint.
+| Entry type | Credit account |
+| --- | --- |
+| `LOAN_PAYMENT` | Loans Receivable: code `1100`, ASSET |
+| `BUY_SHARE` | An EQUITY account |
+| `PENALTY_PAYMENT` | Penalties Receivable: code `1300`, ASSET; or Penalty Income: code `4100`, INCOME |
+
+A loan payment is a single amount against combined principal and accrued
+interest; the endpoint does not split it or calculate interest. Select Penalties
+Receivable to settle a previously accrued penalty, or Penalty Income to recognize
+one directly. This endpoint does not calculate outstanding balances or enforce
+loan/penalty payoff limits.
+
+Amounts allow at most two decimal places. Use decimal strings for exact amounts;
+JSON numbers above 1,000,000,000,000 must be strings. The backend sums entries
+exactly and rejects totals exceeding `9999999999999999.99`. Do not supply a
+header `amount`, `type`, `group_id`, or account postings. IDs may be decimal
+strings or safe positive integers. The header description is optional.
+
+The member must belong to the selected group and cycle. Supply `cycle_id`, or
+let the backend infer it from the selected accounts. All cycle-owned accounts
+must match that cycle. Group accounts can be used with an explicit cycle or
+alongside accounts from that cycle. Historical cycles remain accepted.
+
+Returns HTTP 201 with `{success:true,transaction,entries,account_entries}` only
+after commit. The PAYMENT header contains the sum of component amounts. Each
+component has its own positive debit and negative credit postings. A failure
+rolls back all components and postings. The old `/api/v1/transactions/equity`
+route is removed. Each successful request creates a new payment; automatic retry
+deduplication, share quantities, and receipt-number allocation are not included.
 
 Errors: 400 invalid input/types/membership; 401 unauthenticated; 403 unauthorized
 writer; 404 reference not found in the selected group; 409 database constraint
-or concurrent-write conflict. No new migration is needed beyond 018–021.
+or concurrent-write conflict. No new migration is required for this endpoint.
 
 `POST /api/v1/cycles/members` enrolls users into the selected group's current
 cycle (draft, active, or distributing). Requires a Bearer token, `x-group-slug`,

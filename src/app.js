@@ -17,6 +17,9 @@ function createApp(database = db, services = {}) {
   app.use(createRouter(database));
 
   app.use((error, _request, response, _next) => {
+    if (error.type === "entity.too.large") {
+      return response.status(413).json({ success: false, error: "Request body exceeds the 32 KiB limit" });
+    }
     if (error.type === "entity.parse.failed") {
       return response.status(400).json({ success: false, error: "Invalid JSON body" });
     }

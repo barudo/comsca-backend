@@ -742,7 +742,7 @@ test("login and RLS isolate groups on a reused database connection", {
       await Promise.all(connections.map(connection => connection.destroy()));
     }
   });
-  await t.test("POST equity persists balanced postings and rolls back failures", async () => {
+  await t.test("POST payments persists balanced postings and rolls back failures", async () => {
     const [group] = await db("groups").insert({ name: "Equity", slug: "equity-posting" }).returning("id");
     const authId = "88888888-8888-4888-8888-888888888888";
     await db("auth.users").insert({ id: authId });
@@ -757,24 +757,69 @@ test("login and RLS isolate groups on a reused database connection", {
     const equity = accounts.find(a => a.code === "3000");
     const input = { debit: cash.id, credit: equity.id, amount: "9999999999999999.99", user_id: member.id };
     const handler = serverless(createApp(db, { getUser: async () => ({ id: authId }) }));
+    const paymentBody = body => body.entries ? body : {
+      user_id: body.user_id, cycle_id: body.cycle_id, description: body.description,
+      entries: [{ type: "BUY_SHARE", debit: body.debit, credit: body.credit, amount: body.amount }],
+    };
     const post = async (body = input, slug = "equity-posting") => {
-      const result = await handler({ version: "2.0", rawPath: "/api/v1/transactions/equity", rawQueryString: "group_id=999",
+      const result = await handler({ version: "2.0", rawPath: "/api/v1/transactions/payments", rawQueryString: "group_id=999",
         headers: { "content-type": "application/json", authorization: "Bearer token", "x-group-slug": slug },
-        requestContext: { http: { method: "POST", sourceIp: "127.0.0.1" } }, body: JSON.stringify(body), isBase64Encoded: false }, {});
+        requestContext: { http: { method: "POST", sourceIp: "127.0.0.1" } }, body: JSON.stringify(paymentBody(body)), isBase64Encoded: false }, {});
       return { status: result.statusCode, body: JSON.parse(result.body) };
     };
     const result = await post();
     assert.equal(result.status, 201);
     const header = result.body.transaction;
     assert.equal(header.cycle_id, cycle.id); assert.equal(header.user_id, member.id);
-    assert.equal(header.amount, input.amount); assert.equal(header.type, "EQUITY");
+    assert.equal(header.amount, input.amount); assert.equal(header.type, "PAYMENT");
     assert.deepEqual(JSON.parse(JSON.stringify(await db("transactions").where({ id: header.id }).first())), { ...header, document_type: null, document_number: null });
     const components = await db("transaction_entries").where({ transaction_id: header.id });
-    assert.equal(components.length, 1); assert.equal(components[0].amount, input.amount);
+    assert.equal(components.length, 1); assert.equal(components[0].type, "BUY_SHARE"); assert.equal(components[0].amount, input.amount);
     const postings = await db("account_entries").where({ transaction_entry_id: components[0].id }).orderBy("id");
     assert.deepEqual(postings.map(p => [p.account_id, p.amount]), [[cash.id, input.amount], [equity.id, `-${input.amount}`]]);
     assert.equal((await post({ ...input, credit: cash.id })).status, 400);
     assert.equal((await post({ ...input, credit: accounts.find(a => a.type === "INCOME").id })).status, 400);
+    const loans = accounts.find(a => a.code === "1100");
+    const penalties = accounts.find(a => a.code === "1300");
+    const mixedInput = {
+      user_id: member.id, description: "Member payment",
+      entries: [
+        { type: "BUY_SHARE", debit: cash.id, credit: equity.id, amount: "0.10" },
+        { type: "LOAN_PAYMENT", debit: cash.id, credit: loans.id, amount: "0.20", description: "Principal and interest together" },
+        { type: "PENALTY_PAYMENT", debit: cash.id, credit: penalties.id, amount: "0.30" },
+      ],
+    };
+    const mixed = await post(mixedInput);
+    assert.equal(mixed.status, 201);
+    assert.equal(mixed.body.transaction.type, "PAYMENT");
+    assert.equal(mixed.body.transaction.amount, "0.60");
+    assert.equal(mixed.body.transaction.user_id, member.id);
+    assert.equal(mixed.body.transaction.cycle_id, cycle.id);
+    const mixedComponents = await db("transaction_entries").where({ transaction_id: mixed.body.transaction.id }).orderBy("id");
+    assert.deepEqual(mixedComponents.map(entry => [entry.type, entry.amount]),
+      [["BUY_SHARE", "0.10"], ["LOAN_PAYMENT", "0.20"], ["PENALTY_PAYMENT", "0.30"]]);
+    for (const [index, component] of mixedComponents.entries()) {
+      const rows = await db("account_entries").where({ transaction_entry_id: component.id }).orderBy("id");
+      assert.deepEqual(rows.map(row => [row.account_id, row.amount]),
+        [[cash.id, component.amount], [mixedInput.entries[index].credit, `-${component.amount}`]]);
+    }
+    assert.equal((await post({ ...mixedInput, entries: [
+      { ...mixedInput.entries[0], amount: input.amount }, mixedInput.entries[1],
+    ] })).status, 400);
+    const penaltyIncome = accounts.find(account => account.code === "4100");
+    const maximumBatch = await post({ user_id: member.id, entries: Array.from({ length: 100 }, () =>
+      ({ type: "BUY_SHARE", debit: cash.id, credit: equity.id, amount: "0.01" })) });
+    assert.equal(maximumBatch.status, 201);
+    assert.equal(maximumBatch.body.transaction.amount, "1.00");
+    assert.equal(maximumBatch.body.entries.length, 100);
+    assert.equal(maximumBatch.body.account_entries.length, 200);
+    const immediatePenalty = await post({ user_id: member.id,
+      entries: [{ type: "PENALTY_PAYMENT", debit: cash.id, credit: penaltyIncome.id, amount: "1.00" }],
+    });
+    assert.equal(immediatePenalty.status, 201);
+    const [penaltyComponent] = await db("transaction_entries").where({ transaction_id: immediatePenalty.body.transaction.id });
+    const penaltyPostings = await db("account_entries").where({ transaction_entry_id: penaltyComponent.id }).orderBy("id");
+    assert.deepEqual(penaltyPostings.map(row => [row.account_id, row.amount]), [[cash.id, "1.00"], [penaltyIncome.id, "-1.00"]]);
     const other = await db("accounts").whereNot({ group_id: group.id }).first("id");
     assert.equal((await post({ ...input, debit: other.id })).status, 404);
     assert.equal((await post(input, "alpha")).status, 403);
@@ -790,8 +835,8 @@ test("login and RLS isolate groups on a reused database connection", {
       { group_id: group.id, code: "equity", name: "Group Equity", type: "EQUITY" },
     ]).returning("id");
     const groupPost = await post({ debit: groupCash.id, credit: groupEquity.id, amount: 500 });
-    assert.equal(groupPost.status, 201); assert.equal(groupPost.body.transaction.cycle_id, null);
-    assert.equal(groupPost.body.transaction.user_id, null);
+    assert.equal(groupPost.status, 400);
+    assert.equal((await post({ debit: groupCash.id, credit: groupEquity.id, amount: 500, user_id: member.id })).status, 400);
     // Explicit cycle and mixed group/cycle account directions preserve attribution.
     for (const pair of [
       { debit: cash.id, credit: equity.id },
@@ -807,7 +852,7 @@ test("login and RLS isolate groups on a reused database connection", {
     const foreignUser = await db("users").whereNot({ group_id: group.id }).first("id");
     assert.equal((await post({ ...input, user_id: foreignUser.id })).status, 404);
     const foreignCycle = await db("cycles").whereNot({ group_id: group.id }).first("id");
-    assert.equal((await post({ debit: groupCash.id, credit: groupEquity.id, amount: "1.00", cycle_id: foreignCycle.id })).status, 404);
+    assert.equal((await post({ debit: groupCash.id, credit: groupEquity.id, amount: "1.00", cycle_id: foreignCycle.id, user_id: member.id })).status, 404);
     // A writer waits on locked authorization/reference rows and sees their committed changes.
     const connection = knex({ client: "pg", connection: process.env.TEST_DATABASE_URL, pool: { min: 0, max: 1 } });
     const concurrentHandler = serverless(createApp(connection, { getUser: async () => ({ id: authId }) }));
@@ -816,15 +861,16 @@ test("login and RLS isolate groups on a reused database connection", {
       for (const change of [
         { table: "users", id: actor.id, value: { role: "AUDITOR" }, restore: { role: "OWNER" }, status: 403 },
         { table: "accounts", id: cash.id, value: { type: "INCOME" }, restore: { type: "ASSET" }, status: 400 },
+        { table: "accounts", id: loans.id, value: { code: "1101" }, restore: { code: "1100" }, status: 400 },
       ]) {
         const gate = await db.transaction();
         let pending;
         try {
           await gate(change.table).where({ id: change.id }).update(change.value);
-          pending = concurrentHandler({ version: "2.0", rawPath: "/api/v1/transactions/equity", rawQueryString: "",
+          pending = concurrentHandler({ version: "2.0", rawPath: "/api/v1/transactions/payments", rawQueryString: "",
             headers: { "content-type": "application/json", authorization: "Bearer token", "x-group-slug": "equity-posting" },
             requestContext: { http: { method: "POST", sourceIp: "127.0.0.1" } },
-            body: JSON.stringify({ ...input, amount: "1.00" }), isBase64Encoded: false }, {});
+            body: JSON.stringify(mixedInput), isBase64Encoded: false }, {});
           await waitForLocks(gate, [pid]);
           await gate.commit();
           assert.equal((await pending).statusCode, change.status);
@@ -839,18 +885,18 @@ test("login and RLS isolate groups on a reused database connection", {
       (await db(table).where({ group_id: group.id }).count("* as count").first()).count));
     const before = await counts();
     await db.raw(`CREATE FUNCTION public.reject_test_equity_credit() RETURNS trigger LANGUAGE plpgsql AS $$
-      BEGIN IF NEW.amount < 0 THEN RAISE EXCEPTION 'Test posting rejection' USING ERRCODE='23514'; END IF; RETURN NEW; END $$;
+      BEGIN IF NEW.amount < 0 AND NEW.account_id = ${loans.id} THEN RAISE EXCEPTION 'Test posting rejection' USING ERRCODE='23514'; END IF; RETURN NEW; END $$;
       CREATE TRIGGER test_equity_credit_failure BEFORE INSERT ON public.account_entries
       FOR EACH ROW EXECUTE FUNCTION public.reject_test_equity_credit();`);
     try {
-      const failed = await post({ ...input, amount: "12.34" });
+      const failed = await post(mixedInput);
       assert.equal(failed.status, 409);
       assert.doesNotMatch(failed.body.error, /Test posting rejection/);
       assert.deepEqual(await counts(), before);
       await db.raw(`DROP TRIGGER test_equity_credit_failure ON public.account_entries;
         CREATE CONSTRAINT TRIGGER test_equity_credit_failure AFTER INSERT ON public.account_entries
         DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.reject_test_equity_credit();`);
-      const commitFailure = await post({ ...input, amount: "12.34" });
+      const commitFailure = await post(mixedInput);
       assert.equal(commitFailure.status, 409);
       assert.doesNotMatch(commitFailure.body.error, /Test posting rejection/);
       assert.deepEqual(await counts(), before);

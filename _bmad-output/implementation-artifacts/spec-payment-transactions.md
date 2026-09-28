@@ -2,8 +2,8 @@
 title: 'Replace equity posting with payment transactions'
 type: 'feature'
 created: '2026-09-28'
-status: 'draft'
-route: 'dispatch'
+status: 'done'
+route: 'oneshot'
 review_loop_iteration: 0
 context: ['docs/project-context.md']
 ---
@@ -12,7 +12,7 @@ context: ['docs/project-context.md']
 
 ## Intent
 
-Replace `POST /api/v1/transactions/equity` with `POST /api/v1/transactions/payments`. Create a PAYMENT header containing positive LOAN_PAYMENT, BUY_SHARE, and PENALTY_PAYMENT components. The frontend supplies the member's `user_id`. LOAN_PAYMENT applies to the combined principal and interest, rather than principal alone. Resolve the remaining allocation and account-selection questions before implementing those posting rules.
+Replace `POST /api/v1/transactions/equity` with `POST /api/v1/transactions/payments`. Create a PAYMENT header containing positive LOAN_PAYMENT, BUY_SHARE, and PENALTY_PAYMENT components. The frontend supplies the member's `user_id`. LOAN_PAYMENT applies to the combined principal and interest, rather than principal alone. Record each loan payment as one amount with no principal/interest split. Use client-selected debit/credit account IDs per entry, preserving the proposed explicit-account request format. Loans credit Loans Receivable (1100), which combines principal and accrued interest.
 
 ## Boundaries & Constraints
 
@@ -34,11 +34,6 @@ Replace `POST /api/v1/transactions/equity` with `POST /api/v1/transactions/payme
 
 </frozen-after-approval>
 
-## Open Questions
-
-- For mixed components, client-selected debit/credit IDs per entry (preserves existing explicit-account workflow) or backend-selected accounts (requires defining account mappings)?
-- How should a partial LOAN_PAYMENT split between principal and interest: interest first, proportionally, or an explicit frontend-supplied split? The repository contains cycle interest settings and ledger accounts but no implemented loan accrual or payment-allocation service. Automatic allocation also needs an agreed source for the outstanding amounts; do not invent accrued balances from rate settings alone.
-
 ## Code Map
 
 - `src/routes/index.js` -- explicit route registry; replace equity route and handler binding.
@@ -52,11 +47,11 @@ Replace `POST /api/v1/transactions/equity` with `POST /api/v1/transactions/payme
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `src/handlers/payment-transactions.js` -- implement agreed payment request contract using existing transaction and scope guarantees; remove replaced equity handler.
-- [ ] `src/routes/index.js` -- expose payments and remove equity route.
-- [ ] `test/payment-transactions.test.js` -- adapt request suite and add component/type/total validation appropriate to agreed contract; remove replaced equity request suite.
-- [ ] `test/login.integration.test.js` -- adapt existing endpoint coverage and verify real mixed-component persistence and rollback if selected.
-- [ ] `README.md` -- document actual request shape, posting semantics, errors and removed route.
+- [x] `src/handlers/payment-transactions.js` -- implement agreed payment request contract using existing transaction and scope guarantees; remove replaced equity handler.
+- [x] `src/routes/index.js` -- expose payments and remove equity route.
+- [x] `test/payment-transactions.test.js` -- adapt request suite and add component/type/total validation appropriate to agreed contract; remove replaced equity request suite.
+- [x] `test/login.integration.test.js` -- adapt existing endpoint coverage and verify real mixed-component persistence and rollback if selected.
+- [x] `README.md` -- document actual request shape, posting semantics, errors and removed route.
 
 **Acceptance Criteria:**
 - Given a valid authorized payment, when posted, then its header, components and balanced account postings commit together and retain exact monetary values.
@@ -75,3 +70,18 @@ Replace `POST /api/v1/transactions/equity` with `POST /api/v1/transactions/payme
 - Run request/unit tests with `npm test`.
 - Run existing integration suites against a fresh disposable local PostgreSQL instance, never configured application databases.
 - Run `git diff --check` and review final changes.
+
+- Implementation resumed on explicit user request. Required entries array has 1–100 entries; server derives the header amount using integer cents and rejects numeric(18,2) overflow. Each entry supplies type, debit, credit, amount and optional description. Loan credit must be account code 1100 ASSET; share credit EQUITY; penalty credit 1300 ASSET or 4100 INCOME. Debit must be ASSET. Existing explicit/inferred cycle and reference locking semantics remain. No receipt allocation or external deployment.
+
+- Implemented payment handler and replaced equity route/handler. Updated request tests, real PostgreSQL integration tests, and README. Shared error middleware now returns 413 for bodies exceeding the existing 32 KiB parser limit.
+- Final verification: 107 tests passed with zero skips/failures on a fresh disposable PostgreSQL 18 instance; `git diff --check` passed. Initial sandbox run could not bind test HTTP ports; complete suite passed with local test network permissions.
+
+## Review Triage Log
+
+- Medium: oversized documented batches returned 500 due to existing 32 KiB parser limit. Preserve the API limit, document the aggregate limit, return 413, and test no writes for oversized bodies.
+- Low: cross-component cycle isolation lacked a regression. Added individually valid entries from distinct cycles; assert 400 and no writes.
+- Low: later foreign-account rejection lacked coverage. Added valid first entry followed by inaccessible account; assert 404 and no writes.
+- Low, rejected: separate membership-deletion race test. Existing FOR SHARE membership lock remains unchanged and normal missing-membership rejection is tested; role and account contention are already tested on real PostgreSQL. Additional race orchestration would duplicate unchanged locking behavior without a demonstrated defect.
+- Low: new credit-code concurrency protection lacked coverage. Added concurrent Loans Receivable code mutation and verified waiting request rejects the updated code.
+- Low: near-maximum exact multi-component sum lacked coverage. Added 9999999999999999.98 + 0.01 success assertion.
+- Low: maximum batch only mock-tested. Added real 100-entry payment, with 100 components, 200 postings, and exact 1.00 total.
