@@ -287,21 +287,36 @@ preserves existing accounts; incompatible reserved names/types abort activation.
 | 1000 | Cash | ASSET |
 | 1100 | Loans Receivable | ASSET |
 | 1300 | Penalties Receivable | ASSET |
+| 1400 | Contributions Receivable | ASSET |
 | 2000 | Accounts Payable | LIABILITY |
 | 3000 | Equity | EQUITY |
 | 4000 | Interest Income | INCOME |
 | 4100 | Penalty Income | INCOME |
 | 4200 | Other Income | INCOME |
 | 4300 | Donation Income | INCOME |
+| 4400 | Contribution Income | INCOME |
 | 5000 | Operating Expenses | EXPENSE |
 
 Migration `025_remove_interest_receivable_from_cycle_defaults.js` removes Interest
-Receivable (1200) from the activation template. Newly activated cycles receive
-the ten accounts above. Existing accounts and postings are preserved. Rolling
+Receivable (1200) from the activation template, reducing it to ten accounts.
+Existing accounts and postings are preserved. Rolling
 back restores the eleven-account template for subsequent seeding; it does not
 backfill accounts into existing cycles.
 After rollback, a later status update to `active` or `distributing` seeds the
 restored template, adding Interest Receivable if that cycle does not have it.
+
+Migration `026_add_contribution_cycle_accounts.js` adds Contributions Receivable
+(1400, ASSET) and Contribution Income (4400, INCOME), producing the twelve-account
+template above. The migration updates future seeding without backfilling existing
+cycles. Later activation or transition to distributing seeds any missing defaults.
+Rollback restores the ten-account template but preserves existing accounts and
+postings. Incompatible pre-existing definitions for these reserved codes cause
+activation to fail atomically rather than overwrite custom accounts.
+
+For non-refundable contributions recorded as owed before collection, the intended
+posting is debit Contributions Receivable and credit Contribution Income. On
+collection, debit Cash and credit Contributions Receivable. This migration adds
+the accounts only; it does not create accruals or add a contribution-payment API.
 
 A payment header of 1,100 can contain these independently balanced components:
 

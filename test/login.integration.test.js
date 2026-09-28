@@ -1075,7 +1075,7 @@ test("login and RLS isolate groups on a reused database connection", {
     assert.deepEqual((await get()).body, { success: true, current_cycle_id: cycle.id, accounts: [] });
     await db("cycles").where({ id: cycle.id }).update({ status: "active" });
     const expected = JSON.parse(JSON.stringify(await db("accounts").where({ group_id: accountGroup.id, cycle_id: cycle.id }).orderBy("code").orderBy("id")));
-    assert.equal(expected.length, 10);
+    assert.equal(expected.length, 12);
     assert.equal(expected.some(a => a.code === "1200"), false);
     assert.equal(expected.find(a => a.code === "4300").type, "INCOME");
     for (const role of ["OWNER", "ADMIN", "TREASURER", "AUDITOR"]) {
@@ -1091,14 +1091,14 @@ test("login and RLS isolate groups on a reused database connection", {
     const [nextCycle] = await db("cycles").insert({ group_id: accountGroup.id }).returning("id");
     await db("cycles").where({ id: nextCycle.id }).update({ status: "active" });
     const next = await get();
-    assert.equal(next.body.accounts.length, 10);
+    assert.equal(next.body.accounts.length, 12);
     assert.ok(next.body.accounts.every(a => a.cycle_id === nextCycle.id && !expected.some(old => old.id === a.id)));
     assert.deepEqual(JSON.parse(JSON.stringify(await db("accounts").where({ cycle_id: cycle.id }).orderBy("code").orderBy("id"))), expected);
     await db.transaction(async trx => {
       await trx.raw("SET LOCAL ROLE comsca_group_reader");
       await trx.raw("SELECT set_config('app.group_id', ?, true)", [String(accountGroup.id)]);
       const visible = await trx("accounts").select("id", "group_id");
-      assert.equal(visible.length, 20);
+      assert.equal(visible.length, 24);
       assert.ok(visible.every(a => a.group_id === accountGroup.id));
     });
     await db.transaction(async trx => {

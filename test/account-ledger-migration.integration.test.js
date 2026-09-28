@@ -133,7 +133,7 @@ test('account ledger conversion, activation, concurrency and guarded rollback', 
     await second.commit(); await outcome;
   } finally { if(!first.isCompleted())await first.rollback(); if(!second.isCompleted())await second.rollback(); }
   assert.equal((await db('account_entries').where({transaction_entry_id:component[0].id}).where('amount','<',0).first()).amount,'-1000.00');
-  await t.test('new cycle defaults omit interest receivable and preserve existing ledgers through rollback', async () => {
+  await t.test('new cycle defaults omit interest receivable and preserve existing ledgers through rollback', async defaultsTest => {
     const defaults = require('../migrations/025_remove_interest_receivable_from_cycle_defaults');
     const interest = chart.find(a => a.code === '1200');
     const income = chart.find(a => a.code === '4000');
@@ -181,18 +181,85 @@ test('account ledger conversion, activation, concurrency and guarded rollback', 
     await assert.rejects(db('cycles').where({id:incompatible.id}).update({status:'active'}), {code:'23514'});
     assert.equal((await db('cycles').where({id:incompatible.id}).first()).status, 'draft');
     assert.equal((await db('accounts').where({cycle_id:incompatible.id})).length, 1);
+    await defaultsTest.test('contribution defaults activate without backfilling and rollback preserves postings', async () => {
+      const contributions = require('../migrations/026_add_contribution_cycle_accounts');
+      const beforeAccounts = await db('accounts').orderBy('id');
+      const beforePostings = await db('account_entries').orderBy('id');
+      await db.transaction(trx => contributions.up(trx));
+      assert.deepEqual(await db('accounts').orderBy('id'), beforeAccounts);
+      assert.deepEqual(await db('account_entries').orderBy('id'), beforePostings);
+      const expected = [...expectedDefaults,
+        ['1400', 'Contributions Receivable', 'ASSET'],
+        ['4400', 'Contribution Income', 'INCOME']].sort((a, b) => a[0].localeCompare(b[0]));
+      await db('cycles').where({id:newCycles[0].id}).update({status:'distributing'});
+      assert.deepEqual(definitions(await db('accounts').where({cycle_id:newCycles[0].id})), expected);
+      const upgradedAccounts = await db('accounts').where({cycle_id:newCycles[0].id}).orderBy('id');
+      await db.raw('SELECT public.seed_cycle_accounts(?, ?)', [group.id, newCycles[0].id]);
+      assert.deepEqual(await db('accounts').where({cycle_id:newCycles[0].id}).orderBy('id'), upgradedAccounts);
+      let contributionChart;
+      let contributionCycle;
+      for (const status of ['active', 'distributing']) {
+        const [cycle] = await db('cycles').insert({group_id:group.id}).returning('id');
+        await db('cycles').where({id:cycle.id}).update({status});
+        const accounts = await db('accounts').where({cycle_id:cycle.id}).orderBy('id');
+        assert.equal(accounts.length, 12);
+        assert.deepEqual(definitions(accounts), expected);
+        await db('cycles').where({id:cycle.id}).update({status});
+        await db.raw('SELECT public.seed_cycle_accounts(?, ?)', [group.id, cycle.id]);
+        assert.deepEqual(await db('accounts').where({cycle_id:cycle.id}).orderBy('id'), accounts);
+        contributionChart = accounts;
+        contributionCycle = cycle;
+      }
+      const [direct] = await db('cycles').insert({group_id:group.id,status:'active'}).returning('id');
+      assert.deepEqual(definitions(await db('accounts').where({cycle_id:direct.id})), expected);
+      const [partial] = await db('cycles').insert({group_id:group.id}).returning('id');
+      const compatible = await db('accounts').insert([
+        {group_id:group.id,cycle_id:partial.id,code:'1400',name:'Contributions Receivable',type:'ASSET'},
+        {group_id:group.id,cycle_id:partial.id,code:'4400',name:'Contribution Income',type:'INCOME'},
+      ]).returning('*');
+      await db('cycles').where({id:partial.id}).update({status:'active'});
+      assert.deepEqual(definitions(await db('accounts').where({cycle_id:partial.id})), expected);
+      assert.deepEqual(await db('accounts').whereIn('id',compatible.map(a => a.id)).orderBy('id'), compatible);
+      for (const [code, name, type] of [['1400', 'Custom receivable', 'ASSET'], ['4400', 'Contribution Income', 'ASSET']]) {
+        const [cycle] = await db('cycles').insert({group_id:group.id}).returning('id');
+        await db('accounts').insert({group_id:group.id,cycle_id:cycle.id,code,name,type});
+        await assert.rejects(db('cycles').where({id:cycle.id}).update({status:'active'}), {code:'23514'});
+        assert.equal((await db('cycles').where({id:cycle.id}).first()).status, 'draft');
+        assert.equal((await db('accounts').where({cycle_id:cycle.id})).length, 1);
+      }
+      await db.transaction(async trx => {
+        const [header] = await trx('transactions').insert({group_id:group.id,cycle_id:contributionCycle.id,type:'CONTRIBUTION',amount:'50.00'}).returning('id');
+        const [entry] = await trx('transaction_entries').insert({group_id:group.id,transaction_id:header.id,type:'CONTRIBUTION',amount:'50.00'}).returning('id');
+        await trx('account_entries').insert([
+          {group_id:group.id,transaction_entry_id:entry.id,account_id:contributionChart.find(a => a.code === '1400').id,amount:'50.00'},
+          {group_id:group.id,transaction_entry_id:entry.id,account_id:contributionChart.find(a => a.code === '4400').id,amount:'-50.00'},
+        ]);
+      });
+      const accountsBeforeDown = await db('accounts').orderBy('id');
+      const postingsBeforeDown = await db('account_entries').orderBy('id');
+      await db.transaction(trx => contributions.down(trx));
+      assert.deepEqual(await db('accounts').orderBy('id'), accountsBeforeDown);
+      assert.deepEqual(await db('account_entries').orderBy('id'), postingsBeforeDown);
+      await db.raw('SELECT public.seed_cycle_accounts(?, ?)', [group.id, contributionCycle.id]);
+      assert.deepEqual(await db('accounts').orderBy('id'), accountsBeforeDown);
+      assert.deepEqual(await db('account_entries').orderBy('id'), postingsBeforeDown);
+      const [restored] = await db('cycles').insert({group_id:group.id,status:'active'}).returning('id');
+      assert.deepEqual(definitions(await db('accounts').where({cycle_id:restored.id})), expectedDefaults);
+    });
+    const postingsBeforeRollback = await db('account_entries').orderBy('id');
     const beforeRollback = await db('accounts').orderBy('id');
     await db.transaction(trx => defaults.down(trx));
     assert.deepEqual(await db('accounts').orderBy('id'), beforeRollback);
-    assert.deepEqual(await db('account_entries').orderBy('id'), existingPostings);
+    assert.deepEqual(await db('account_entries').orderBy('id'), postingsBeforeRollback);
     const [restored] = await db('cycles').insert({group_id:group.id,status:'active'}).returning('id');
     const restoredChart = await db('accounts').where({cycle_id:restored.id});
     assert.equal(restoredChart.length, 11);
     assert.equal(restoredChart.find(a => a.code === '1200').name, 'Interest Receivable');
     assert.deepEqual(definitions(restoredChart), definitions(chart));
-    for (const cycle of newCycles) assert.equal((await db('accounts').where({cycle_id:cycle.id})).length, 10);
-    await db('cycles').where({id:newCycles[0].id}).update({status:'active'});
-    assert.deepEqual(definitions(await db('accounts').where({cycle_id:newCycles[0].id})), definitions(chart));
+    assert.equal((await db('accounts').where({cycle_id:newCycles[0].id})).length, 12);
+    assert.equal((await db('accounts').where({cycle_id:newCycles[1].id})).length, 10);
+    await db('cycles').where({id:newCycles[1].id}).update({status:'active'});
+    assert.deepEqual(definitions(await db('accounts').where({cycle_id:newCycles[1].id})), definitions(chart));
   });
   await db.transaction(trx => seed.down(trx));
   assert.equal((await db('accounts').where({cycle_id:draft.id})).length,11);

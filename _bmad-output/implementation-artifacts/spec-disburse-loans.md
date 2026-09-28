@@ -2,7 +2,7 @@
 title: 'Post a member loan disbursement'
 type: 'feature'
 created: '2026-09-28'
-status: 'in-progress'
+status: 'done'
 route: 'oneshot'
 review_loop_iteration: 0
 context: ['docs/project-context.md']
@@ -21,3 +21,5 @@ Add POST /api/v1/transactions/disburse-loans accepting required member user_id, 
 - Existing payment handler provides matching authorization, scope, locking, decimal validation and response conventions. New dedicated handler limits the change to disbursement behavior.
 - Existing schema permits LOAN_DISBURSED without migration. Historical LOAN_DISBURSEMENT records remain unchanged; no balance calculation endpoint is added here.
 - Tests cover request validation and real PostgreSQL persistence and rollback.
+
+- Endpoint and tests were recorded in commit8fe79f5. Subsequent review completed after the original reviewer hit a usage limit; no substantive defects found. Combined final PostgreSQL suite:116 tests passed, zero failures/skips. Sample request provided to the user with the contribution migration completion. No deployment performed.
