@@ -4,6 +4,7 @@ const groupSlugMiddleware = require("../middleware/group-slug");
 const CyclesHandler = require("../handlers/cycles");
 const CycleAccountsHandler = require("../handlers/cycle-accounts");
 const CycleMembersHandler = require("../handlers/cycle-members");
+const LoanDisbursementsHandler = require("../handlers/loan-disbursements");
 const PaymentTransactionsHandler = require("../handlers/payment-transactions");
 const GroupUsersHandler = require("../handlers/group-users");
 const GroupUserListHandler = require("../handlers/group-user-list");
@@ -20,6 +21,7 @@ function createRouter(database) {
   const cycles = new CyclesHandler();
   const cycleAccounts = new CycleAccountsHandler();
   const cycleMembers = new CycleMembersHandler();
+  const loanDisbursements = new LoanDisbursementsHandler();
   const paymentTransactions = new PaymentTransactionsHandler();
   const groupUsers = new GroupUsersHandler();
   const groupUserList = new GroupUserListHandler();
@@ -69,6 +71,7 @@ function createRouter(database) {
   router.get("/api/v1/cycles", authenticate, cycles.list.bind(cycles));
   router.get("/api/v1/cycles/accounts", authenticate, cycleAccounts.list.bind(cycleAccounts));
   router.post("/api/v1/cycles/members", authenticate, cycleMembers.create.bind(cycleMembers));
+  router.post("/api/v1/transactions/disburse-loans", authenticate, loanDisbursements.create.bind(loanDisbursements));
   router.post("/api/v1/transactions/payments", authenticate, paymentTransactions.create.bind(paymentTransactions));
   router.post("/api/v1/cycles", authenticate, cycles.create.bind(cycles));
   router.put("/api/v1/cycles/:id", authenticate, cycles.update.bind(cycles));

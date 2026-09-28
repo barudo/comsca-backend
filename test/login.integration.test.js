@@ -905,6 +905,116 @@ test("login and RLS isolate groups on a reused database connection", {
       await db.raw("DROP TRIGGER test_equity_credit_failure ON public.account_entries; DROP FUNCTION public.reject_test_equity_credit()");
     }
   });
+  await t.test("POST loan disbursements persist balanced postings and roll back failures", async () => {
+    const [group] = await db("groups").insert({ name: "Loan Disbursement", slug: "loan-disbursement" }).returning("id");
+    const authId = "abababab-abab-4bab-8bab-abababababab";
+    await db("auth.users").insert({ id: authId });
+    const [actor, member, unenrolled] = await db("users").insert([
+      { auth_user_id: authId, group_id: group.id, first_name: "Loan", family_name: "Treasurer", role: "TREASURER" },
+      { group_id: group.id, first_name: "Loan", family_name: "Member", role: "MEMBER" },
+      { group_id: group.id, first_name: "Unenrolled", family_name: "Member", role: "MEMBER" },
+    ]).returning("id");
+    const [cycle] = await db("cycles").insert({ group_id: group.id, status: "active" }).returning("id");
+    await db("cycle_members").insert({ cycle_id: cycle.id, user_id: member.id });
+    const accounts = await db("accounts").where({ cycle_id: cycle.id });
+    const cash = accounts.find(account => account.code === "1000");
+    const loans = accounts.find(account => account.code === "1100");
+    const input = { user_id: member.id, debit: loans.id, credit: cash.id,
+      amount: "9999999999999999.99", description: "Member loan disbursement" };
+    const handler = serverless(createApp(db, { getUser: async () => ({ id: authId }) }));
+    const event = (body, slug = "loan-disbursement") => ({ version: "2.0",
+      rawPath: "/api/v1/transactions/disburse-loans", rawQueryString: "group_id=999",
+      headers: { "content-type": "application/json", authorization: "Bearer token", "x-group-slug": slug },
+      requestContext: { http: { method: "POST", sourceIp: "127.0.0.1" } },
+      body: JSON.stringify(body), isBase64Encoded: false });
+    const post = async (body = input, slug) => {
+      const response = await handler(event(body, slug), {});
+      return { status: response.statusCode, body: JSON.parse(response.body) };
+    };
+    const result = await post();
+    assert.equal(result.status, 201);
+    const header = result.body.transaction;
+    assert.equal(header.type, "LOAN_DISBURSED");
+    assert.equal(header.amount, input.amount);
+    assert.equal(header.user_id, member.id);
+    assert.equal(header.cycle_id, cycle.id);
+    assert.equal(header.description, input.description);
+    const stored = await db("transactions").where({ id: header.id }).first();
+    assert.equal(stored.amount, input.amount);
+    assert.equal(stored.type, "LOAN_DISBURSED");
+    const components = await db("transaction_entries").where({ transaction_id: header.id });
+    assert.equal(components.length, 1);
+    assert.equal(components[0].type, "LOAN_DISBURSED");
+    assert.equal(components[0].amount, input.amount);
+    const postings = await db("account_entries").where({ transaction_entry_id: components[0].id }).orderBy("id");
+    assert.deepEqual(postings.map(row => [row.account_id, row.amount]),
+      [[loans.id, input.amount], [cash.id, `-${input.amount}`]]);
+    const explicit = await post({ ...input, cycle_id: cycle.id, amount: "0.01" });
+    assert.equal(explicit.status, 201);
+    assert.equal(explicit.body.transaction.cycle_id, cycle.id);
+    assert.equal((await post({ ...input, user_id: undefined })).status, 400);
+    assert.equal((await post({ ...input, user_id: unenrolled.id })).status, 400);
+    assert.equal((await post({ ...input, credit: loans.id })).status, 400);
+    assert.equal((await post({ ...input, debit: cash.id, credit: loans.id })).status, 400);
+    assert.equal((await post({ ...input, credit: accounts.find(account => account.type === "INCOME").id })).status, 400);
+    const foreignAccount = await db("accounts").whereNot({ group_id: group.id }).first("id");
+    const foreignUser = await db("users").whereNot({ group_id: group.id }).first("id");
+    assert.equal((await post({ ...input, credit: foreignAccount.id })).status, 404);
+    assert.equal((await post({ ...input, user_id: foreignUser.id })).status, 404);
+    assert.equal((await post(input, "alpha")).status, 403);
+    for (const role of ["OWNER", "ADMIN"]) {
+      await db("users").where({ id: actor.id }).update({ role });
+      assert.equal((await post({ ...input, amount: "1.00" })).status, 201);
+    }
+    await db("users").where({ id: actor.id }).update({ role: "AUDITOR" });
+    assert.equal((await post()).status, 403);
+    await db("users").where({ id: actor.id }).update({ role: "TREASURER" });
+    const connection = knex({ client: "pg", connection: process.env.TEST_DATABASE_URL, pool: { min: 0, max: 1 } });
+    const concurrentHandler = serverless(createApp(connection, { getUser: async () => ({ id: authId }) }));
+    try {
+      const { rows: [{ pid }] } = await connection.raw("SELECT pg_backend_pid() AS pid");
+      for (const change of [
+        { table: "users", id: actor.id, value: { role: "AUDITOR" }, restore: { role: "TREASURER" }, status: 403 },
+        { table: "accounts", id: loans.id, value: { code: "1101" }, restore: { code: "1100" }, status: 400 },
+      ]) {
+        const gate = await db.transaction();
+        let pending;
+        try {
+          await gate(change.table).where({ id: change.id }).update(change.value);
+          pending = concurrentHandler(event(input), {});
+          await waitForLocks(gate, [pid]);
+          await gate.commit();
+          assert.equal((await pending).statusCode, change.status);
+        } finally {
+          if (!gate.isCompleted()) await gate.rollback();
+          if (pending) await pending;
+          await db(change.table).where({ id: change.id }).update(change.restore);
+        }
+      }
+    } finally { await connection.destroy(); }
+    const counts = async () => Promise.all(["transactions", "transaction_entries", "account_entries"].map(async table =>
+      (await db(table).where({ group_id: group.id }).count("* as count").first()).count));
+    const before = await counts();
+    await db.raw(`CREATE FUNCTION public.reject_test_disbursement_credit() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.amount < 0 AND NEW.account_id = ${cash.id} THEN RAISE EXCEPTION 'Test disbursement rejection' USING ERRCODE='23514'; END IF; RETURN NEW; END $$;
+      CREATE TRIGGER test_disbursement_credit_failure BEFORE INSERT ON public.account_entries
+      FOR EACH ROW EXECUTE FUNCTION public.reject_test_disbursement_credit();`);
+    try {
+      const failed = await post();
+      assert.equal(failed.status, 409);
+      assert.doesNotMatch(failed.body.error, /Test disbursement rejection/);
+      assert.deepEqual(await counts(), before);
+      await db.raw(`DROP TRIGGER test_disbursement_credit_failure ON public.account_entries;
+        CREATE CONSTRAINT TRIGGER test_disbursement_credit_failure AFTER INSERT ON public.account_entries
+        DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.reject_test_disbursement_credit();`);
+      const commitFailure = await post();
+      assert.equal(commitFailure.status, 409);
+      assert.doesNotMatch(commitFailure.body.error, /Test disbursement rejection/);
+      assert.deepEqual(await counts(), before);
+    } finally {
+      await db.raw("DROP TRIGGER test_disbursement_credit_failure ON public.account_entries; DROP FUNCTION public.reject_test_disbursement_credit()");
+    }
+  });
   await t.test("POST cycle members enrolls only group users in the current cycle", async () => {
     const [memberGroup] = await db("groups").insert({ name: "Enrollment", slug: "enrollment" }).returning("id");
     const enrollmentAuth = "99999999-9999-4999-8999-999999999999";

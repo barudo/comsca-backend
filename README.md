@@ -326,6 +326,40 @@ there is no second writable posting representation. Rollback of 019 retains all
 accounts. Rollback of 018 rejects cycle ownership or component data that the old
 schema cannot preserve; use a verified backup for incompatible downgrades.
 
+`POST /api/v1/transactions/disburse-loans` records a loan issued to a member.
+Requires a Bearer token and `x-group-slug`; OWNER, ADMIN and TREASURER may post.
+
+```json
+{
+  "user_id": "12",
+  "cycle_id": "7",
+  "debit": "102",
+  "credit": "101",
+  "amount": "5000.00",
+  "description": "Member loan disbursement"
+}
+```
+
+Use actual account IDs from `GET /api/v1/cycles/accounts`. `debit` must be Loans
+Receivable (code `1100`, ASSET); `credit` must be a different ASSET account used
+to fund the loan, such as Cash (code `1000`). `user_id`, `debit`, `credit`, and
+`amount` are required. `cycle_id` can be omitted when inferred from the accounts;
+the member must belong to that cycle and group. All cycle-owned accounts must
+match the selected cycle; group accounts and historical cycles are supported.
+
+Amounts must be positive with at most two decimal places and fit numeric(18,2).
+Use strings for exact amounts; JSON numbers above 1,000,000,000,000 are rejected.
+IDs accept decimal strings or safe positive integers. The optional description
+allows up to 4000 characters. Unknown fields are rejected. The API body limit is
+32 KiB (413 when exceeded).
+
+Returns 201 with `{success:true,transaction,entries,account_entries}` after
+atomically creating one `LOAN_DISBURSED` header and component, a positive Loans
+Receivable posting and a negative funding-account posting. Historical records
+using `LOAN_DISBURSEMENT` are not renamed. This endpoint does not calculate
+interest, enforce funding balances or loan limits, allocate voucher numbers, or
+deduplicate repeated requests. Errors follow the payments endpoint below.
+
 `POST /api/v1/transactions/payments` replaces the equity endpoint and records a
 member payment. Supply a Bearer token and `x-group-slug`; only the group's OWNER,
 ADMIN or TREASURER can post. The frontend supplies the member's `user_id` and
