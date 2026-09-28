@@ -1015,6 +1015,112 @@ test("login and RLS isolate groups on a reused database connection", {
       await db.raw("DROP TRIGGER test_disbursement_credit_failure ON public.account_entries; DROP FUNCTION public.reject_test_disbursement_credit()");
     }
   });
+  await t.test("POST contributions persists members atomically and serializes roster and closure races", async () => {
+    const [group] = await db("groups").insert({ name: "Contributions", slug: "contribution-charge" }).returning("id");
+    const authId = "acacacac-acac-4cac-8cac-acacacacacac";
+    await db("auth.users").insert({ id: authId });
+    const members = await db("users").insert(Array.from({ length: 6 }, (_, i) => ({
+      group_id: group.id, first_name: `Contributor ${i}`, family_name: "Member", role: i === 0 ? "OWNER" : "MEMBER",
+      ...(i === 0 ? { auth_user_id: authId } : {}),
+    }))).returning("id");
+    const [historical] = await db("cycles").insert({ group_id: group.id, status: "closed" }).returning("id");
+    const [cycle] = await db("cycles").insert({ group_id: group.id, status: "active" }).returning("id");
+    await db("cycle_members").insert([
+      ...members.slice(0, 3).map(member => ({ cycle_id: cycle.id, user_id: member.id })),
+      { cycle_id: historical.id, user_id: members[5].id },
+    ]);
+    const accounts = await db("accounts").where({ cycle_id: cycle.id });
+    const debit = accounts.find(account => account.code === "1400");
+    const credit = accounts.find(account => account.code === "4400");
+    const input = { debit: debit.id, credit: credit.id, amount: "25.50" };
+    const event = (body = input, rawPath = "/api/v1/contributions/charge") => ({ version: "2.0", rawPath,
+      headers: { "content-type": "application/json", authorization: "Bearer token", "x-group-slug": "contribution-charge" },
+      requestContext: { http: { method: "POST", sourceIp: "127.0.0.1" } }, body: JSON.stringify(body), isBase64Encoded: false });
+    const makeHandler = connection => serverless(createApp(connection, { getUser: async () => ({ id: authId }) }));
+    const handler = makeHandler(db);
+    const post = async () => { const result = await handler(event(), {}); return { status: result.statusCode, body: JSON.parse(result.body) }; };
+    const result = await post();
+    assert.equal(result.status, 201);
+    const header = await db("transactions").where({ id: result.body.transaction.id }).first();
+    assert.equal(header.type, "CONTRIBUTION"); assert.equal(header.amount, "76.50");
+    assert.equal(header.user_id, null); assert.equal(header.cycle_id, cycle.id); assert.equal(header.group_id, group.id);
+    const entries = await db("transaction_entries").where({ transaction_id: header.id }).orderBy("user_id");
+    assert.deepEqual(entries.map(entry => entry.user_id), members.slice(0, 3).map(member => member.id));
+    const postings = await db("account_entries").whereIn("transaction_entry_id", entries.map(entry => entry.id)).orderBy("id");
+    assert.equal(postings.length, 6);
+    for (const entry of entries) {
+      assert.equal(entry.type, "CONTRIBUTION"); assert.equal(entry.amount, "25.50");
+      assert.equal(entry.cycle_id, cycle.id); assert.equal(entry.group_id, group.id);
+      assert.deepEqual(postings.filter(posting => posting.transaction_entry_id === entry.id)
+        .map(posting => [posting.account_id, posting.amount]), [[debit.id, "25.50"], [credit.id, "-25.50"]]);
+    }
+    const counts = async () => Promise.all(["transactions", "transaction_entries", "account_entries"].map(async table =>
+      (await db(table).where({ group_id: group.id }).count("* as count").first()).count));
+    const before = await counts();
+    await db.raw(`CREATE FUNCTION public.reject_test_contribution_credit() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.account_id = ${credit.id} THEN RAISE EXCEPTION 'Test contribution posting rejection' USING ERRCODE='23514'; END IF; RETURN NEW; END $$;
+      CREATE TRIGGER test_contribution_failure BEFORE INSERT ON public.account_entries
+      FOR EACH ROW EXECUTE FUNCTION public.reject_test_contribution_credit();`);
+    try {
+      assert.equal((await post()).status, 409); assert.deepEqual(await counts(), before);
+      await db.raw(`DROP TRIGGER test_contribution_failure ON public.account_entries;
+        CREATE CONSTRAINT TRIGGER test_contribution_failure AFTER INSERT ON public.account_entries
+        DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.reject_test_contribution_credit();`);
+      assert.equal((await post()).status, 409); assert.deepEqual(await counts(), before);
+    } finally {
+      await db.raw("DROP TRIGGER test_contribution_failure ON public.account_entries; DROP FUNCTION public.reject_test_contribution_credit()");
+    }
+    const chargeDb = knex({ client: "pg", connection: process.env.TEST_DATABASE_URL, pool: { min: 0, max: 1 } });
+    const enrollDb = knex({ client: "pg", connection: process.env.TEST_DATABASE_URL, pool: { min: 0, max: 1 } });
+    try {
+      const charge = makeHandler(chargeDb); const enroll = makeHandler(enrollDb);
+      const { rows: [{ pid: chargePid }] } = await chargeDb.raw("SELECT pg_backend_pid() AS pid");
+      const { rows: [{ pid: enrollPid }] } = await enrollDb.raw("SELECT pg_backend_pid() AS pid");
+      // Charge holds the cycle lock while waiting for accounts. Enrollment must wait,
+      // and the charge's persisted roster must exclude that later enrollment.
+      let gate = await db.transaction(); let pendingCharge; let pendingEnrollment;
+      try {
+        await gate("accounts").where({ id: debit.id }).forUpdate().first();
+        pendingCharge = charge(event(), {});
+        await waitForLocks(gate, [chargePid]);
+        pendingEnrollment = enroll(event({ users: [members[3].id] }, "/api/v1/cycles/members"), {});
+        await waitForLocks(gate, [chargePid, enrollPid]);
+        await gate.commit();
+        const charged = await pendingCharge;
+        assert.equal(charged.statusCode, 201);
+        const stored = await db("transaction_entries").where({ transaction_id: JSON.parse(charged.body).transaction.id }).orderBy("user_id");
+        assert.deepEqual(stored.map(entry => entry.user_id), members.slice(0, 3).map(member => member.id));
+        assert.equal((await pendingEnrollment).statusCode, 200);
+      } finally {
+        if (!gate.isCompleted()) await gate.rollback();
+        if (pendingCharge) await pendingCharge; if (pendingEnrollment) await pendingEnrollment;
+      }
+      // An enrollment that wins the cycle lock is included after its commit.
+      gate = await db.transaction(); pendingCharge = null;
+      try {
+        await gate("cycles").where({ id: cycle.id }).forUpdate().first();
+        await gate("cycle_members").insert({ cycle_id: cycle.id, user_id: members[4].id });
+        pendingCharge = charge(event(), {});
+        await waitForLocks(gate, [chargePid]);
+        await gate.commit();
+        const charged = await pendingCharge;
+        assert.equal(charged.statusCode, 201);
+        const body = JSON.parse(charged.body);
+        assert.equal(body.transaction.amount, "127.50");
+        assert.deepEqual(body.entries.map(entry => entry.user_id), members.slice(0, 5).map(member => member.id));
+      } finally { if (!gate.isCompleted()) await gate.rollback(); if (pendingCharge) await pendingCharge; }
+      const beforeClosure = await counts();
+      gate = await db.transaction(); pendingCharge = null;
+      try {
+        await gate("cycles").where({ id: cycle.id }).update({ status: "closed" });
+        pendingCharge = charge(event(), {});
+        await waitForLocks(gate, [chargePid]);
+        await gate.commit();
+        assert.equal((await pendingCharge).statusCode, 409);
+        assert.deepEqual(await counts(), beforeClosure);
+      } finally { if (!gate.isCompleted()) await gate.rollback(); if (pendingCharge) await pendingCharge; }
+    } finally { await chargeDb.destroy(); await enrollDb.destroy(); }
+  });
   await t.test("POST cycle members enrolls only group users in the current cycle", async () => {
     const [memberGroup] = await db("groups").insert({ name: "Enrollment", slug: "enrollment" }).returning("id");
     const enrollmentAuth = "99999999-9999-4999-8999-999999999999";

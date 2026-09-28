@@ -1007,3 +1007,43 @@ messages in `errors`, with a readable summary in `error`.
 
 All API endpoints use the `/api/v1` prefix. Unversioned URLs (including `/`) return
 `404`; clients must use the versioned paths shown above.
+
+### Charge contributions
+
+`POST /api/v1/contributions/charge` requires `Authorization: Bearer <token>`,
+`x-group-slug`, and `Content-Type: application/json`. The caller must be an
+OWNER, ADMIN, or TREASURER in the selected group.
+
+```json
+{
+  "amount": "25.50",
+  "debit": "101",
+  "credit": "102",
+  "description": "September contributions"
+}
+```
+
+`amount` is a positive **per-member** amount with at most two decimal places.
+Use decimal strings for large amounts. `debit` selects Contributions Receivable
+(1400, ASSET), and `credit` selects Contribution Income (4400, INCOME). Accounts
+must belong to the selected group and, when cycle-scoped, its current cycle.
+Accounts 1400 and 4400 must already exist. Migration 026 changes future account
+seeding, so already-active cycles may lack them. An operator can provision the
+current defaults for an older cycle with the existing PostgreSQL function
+`SELECT public.seed_cycle_accounts(group_id, cycle_id)`. Its compatibility checks
+reject conflicting reserved account definitions. The charge endpoint does not
+backfill accounts.
+
+`description` is optional (up to 4000 characters); other fields are rejected.
+The current cycle is the newest non-closed cycle, ordered by creation time and ID.
+
+A successful response is HTTP 201 with `{ "success": true, "transaction": {...},
+"entries": [...], "account_entries": [...] }`. Three enrolled members at 25.50
+produce one CONTRIBUTION transaction totaling 76.50, three CONTRIBUTION entries
+with `user_id`, `cycle_id`, and amount 25.50, and six account postings. Each member
+entry has a +25.50 debit and -25.50 credit; account totals equal the full charge.
+All records commit atomically. Repeating a successful request creates a new charge.
+
+Invalid input or numeric(18,2) overflow returns 400; insufficient role returns 403;
+accounts absent from the selected group return 404. Missing current cycle, an
+empty roster, or a concurrent integrity conflict returns 409 with no partial writes.

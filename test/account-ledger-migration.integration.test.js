@@ -261,6 +261,72 @@ test('account ledger conversion, activation, concurrency and guarded rollback', 
     await db('cycles').where({id:newCycles[1].id}).update({status:'active'});
     assert.deepEqual(definitions(await db('accounts').where({cycle_id:newCycles[1].id})), definitions(chart));
   });
+  await t.test('member contribution entries enforce scope, balance and guarded rollback', async () => {
+    const memberEntries = require('../migrations/027_add_contribution_member_entries');
+    const before = await db('transaction_entries').orderBy('id');
+    await db.transaction(trx => memberEntries.up(trx));
+    assert.deepEqual((await db('transaction_entries').orderBy('id')).map(({user_id,cycle_id,...entry}) => {
+      assert.equal(user_id, null); assert.equal(cycle_id, null); return entry;
+    }), before);
+    // Rollback is safe while all existing components retain their old shape.
+    await db.transaction(trx => memberEntries.down(trx));
+    assert.deepEqual(await db('transaction_entries').orderBy('id'), before);
+    await db.transaction(trx => memberEntries.up(trx));
+    const members = await db('users').insert([{group_id:group.id}, {group_id:group.id}, {group_id:group.id}]).returning('id');
+    const [outsider] = await db('users').insert({group_id:otherGroup.id}).returning('id');
+    const [unenrolled] = await db('users').insert({group_id:group.id}).returning('id');
+    await db('cycle_members').insert(members.map(user => ({cycle_id:closed.id,user_id:user.id})));
+    // Even a malformed cross-group enrollment cannot bypass the entry's group FK.
+    await db('cycle_members').insert({cycle_id:closed.id,user_id:outsider.id});
+    const create = (overrides = {}, badPosting = false, withMembers = true, type = 'CONTRIBUTION') => db.transaction(async trx => {
+      const [header] = await trx('transactions').insert({group_id:group.id,cycle_id:closed.id,type,amount:'76.50'}).returning('*');
+      const entries = await trx('transaction_entries').insert(members.map(user => ({group_id:group.id,
+        transaction_id:header.id,type,amount:'25.50',
+        ...(withMembers ? {cycle_id:closed.id,user_id:user.id} : {}), ...overrides}))).returning('*');
+      await trx('account_entries').insert(entries.flatMap(entry => [
+        {group_id:group.id,transaction_entry_id:entry.id,account_id:loans.id,amount:'25.50'},
+        {group_id:group.id,transaction_entry_id:entry.id,account_id:cash.id,amount:badPosting?'-25.49':'-25.50'},
+      ]));
+      return {header,entries};
+    });
+    const counts = async () => Promise.all(['transactions','transaction_entries','account_entries'].map(async table => (await db(table).count('* as count').first()).count));
+    const initialCounts = await counts();
+    for (const [overrides, code] of [
+      [{user_id:outsider.id}, '23503'], [{user_id:unenrolled.id}, '23503'],
+      [{cycle_id:active.id}, '23503'], [{cycle_id:null}, '23514'],
+      [{group_id:otherGroup.id}, '23503'],
+    ]) {
+      await assert.rejects(create(overrides), {code});
+      assert.deepEqual(await counts(), initialCounts);
+    }
+    await assert.rejects(create({}, true), {code:'23514'});
+    assert.deepEqual(await counts(), initialCounts);
+    // Existing payment and disbursement component writes still omit member columns.
+    for (const type of ['PAYMENT', 'LOAN_DISBURSED']) {
+      const compatible = await create({}, false, false, type);
+      assert.ok(compatible.entries.every(entry => entry.user_id === null && entry.cycle_id === null));
+    }
+    const charged = await create();
+    assert.equal(charged.header.amount, '76.50');
+    assert.deepEqual(charged.entries.map(entry => entry.user_id), members.map(user => user.id));
+    await assert.rejects(db('cycle_members').where({cycle_id:closed.id,user_id:members[0].id}).del(), error => ['23503', '23001'].includes(error.code));
+    await assert.rejects(db('transactions').where({id:charged.header.id}).update({cycle_id:active.id}), {code:'23503'});
+    await assert.rejects(db('transactions').where({id:charged.header.id}).update({cycle_id:null}), {code:'23503'});
+    await assert.rejects(db.transaction(async trx => {
+      await trx.raw('SET CONSTRAINTS ALL IMMEDIATE');
+      await trx('account_entries').where({transaction_entry_id:charged.entries[0].id}).where('amount','>',0).del();
+    }), {code:'23514'});
+    const retained = await db('transaction_entries').orderBy('id');
+    await assert.rejects(db.transaction(trx => memberEntries.down(trx)), /lose transaction entry member data/);
+    assert.deepEqual(await db('transaction_entries').orderBy('id'), retained);
+    await db.transaction(async trx => {
+      await trx('account_entries').whereIn('transaction_entry_id', charged.entries.map(entry => entry.id)).del();
+      await trx('transaction_entries').where({transaction_id:charged.header.id}).del();
+      await trx('transactions').where({id:charged.header.id}).del();
+    });
+    await db.transaction(trx => memberEntries.down(trx));
+    assert.equal(await db.schema.hasColumn('transaction_entries','user_id'), false);
+  });
   await db.transaction(trx => seed.down(trx));
   assert.equal((await db('accounts').where({cycle_id:draft.id})).length,11);
   await assert.rejects(db.transaction(trx => migration.down(trx)),/lose account cycle ownership/);
