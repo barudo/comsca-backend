@@ -286,7 +286,6 @@ preserves existing accounts; incompatible reserved names/types abort activation.
 | --- | --- | --- |
 | 1000 | Cash | ASSET |
 | 1100 | Loans Receivable | ASSET |
-| 1200 | Interest Receivable | ASSET |
 | 1300 | Penalties Receivable | ASSET |
 | 2000 | Accounts Payable | LIABILITY |
 | 3000 | Equity | EQUITY |
@@ -295,6 +294,14 @@ preserves existing accounts; incompatible reserved names/types abort activation.
 | 4200 | Other Income | INCOME |
 | 4300 | Donation Income | INCOME |
 | 5000 | Operating Expenses | EXPENSE |
+
+Migration `025_remove_interest_receivable_from_cycle_defaults.js` removes Interest
+Receivable (1200) from the activation template. Newly activated cycles receive
+the ten accounts above. Existing accounts and postings are preserved. Rolling
+back restores the eleven-account template for subsequent seeding; it does not
+backfill accounts into existing cycles.
+After rollback, a later status update to `active` or `distributing` seeds the
+restored template, adding Interest Receivable if that cycle does not have it.
 
 A payment header of 1,100 can contain these independently balanced components:
 
