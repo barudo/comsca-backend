@@ -81,6 +81,8 @@ test("payments POST creates a member PAYMENT and balanced component postings for
     ]);
     for (const entry of result.body.entries) {
       assert.equal(entry.group_id, "1");
+      assert.equal(entry.user_id, result.body.transaction.user_id);
+      assert.equal(entry.cycle_id, result.body.transaction.cycle_id);
       assert.equal(entry.transaction_id, result.body.transaction.id);
       const postings = result.body.account_entries.filter(p => p.transaction_entry_id === entry.id);
       assert.equal(postings.length, 2);

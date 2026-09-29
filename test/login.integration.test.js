@@ -799,6 +799,8 @@ test("login and RLS isolate groups on a reused database connection", {
     assert.deepEqual(mixedComponents.map(entry => [entry.type, entry.amount]),
       [["BUY_SHARE", "0.10"], ["LOAN_PAYMENT", "0.20"], ["PENALTY_PAYMENT", "0.30"]]);
     for (const [index, component] of mixedComponents.entries()) {
+      assert.equal(component.user_id, member.id);
+      assert.equal(component.cycle_id, cycle.id);
       const rows = await db("account_entries").where({ transaction_entry_id: component.id }).orderBy("id");
       assert.deepEqual(rows.map(row => [row.account_id, row.amount]),
         [[cash.id, component.amount], [mixedInput.entries[index].credit, `-${component.amount}`]]);
