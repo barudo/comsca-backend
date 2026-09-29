@@ -6,6 +6,7 @@ function fail(message, status = 400) {
 }
 
 const creditRules = {
+  PAY_CONTRIBUTION: account => account.type === "ASSET" && account.code === "1400",
   LOAN_PAYMENT: account => account.type === "ASSET" && account.code === "1100",
   BUY_SHARE: account => account.type === "EQUITY",
   PENALTY_PAYMENT: account => (account.type === "ASSET" && account.code === "1300") ||

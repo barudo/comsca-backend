@@ -12,7 +12,8 @@ function fixture(t) {
       { id: "102", cycle_id: "20", type: "ASSET", code: "1100" },
       { id: "106", cycle_id: "20", type: "EQUITY", code: "3000" },
       { id: "107", cycle_id: "20", type: "ASSET", code: "1300" },
-      { id: "108", cycle_id: "20", type: "INCOME", code: "4100" }],
+      { id: "108", cycle_id: "20", type: "INCOME", code: "4100" },
+      { id: "109", cycle_id: "20", type: "ASSET", code: "1400" }],
     writes: [], queries: [] };
   let header;
   Object.defineProperty(db, "transaction", { value: async fn => {
@@ -66,18 +67,20 @@ test("payments POST creates a member PAYMENT and balanced component postings for
       { type: "LOAN_PAYMENT", debit: "101", credit: "102", amount: "600.10", description: "Loan repayment" },
       { ...share, amount: "300.20" },
       { type: "PENALTY_PAYMENT", debit: "101", credit: "107", amount: "100.01" },
+      { type: "PAY_CONTRIBUTION", debit: "101", credit: "109", amount: "25.50" },
     ] });
     assert.equal(result.status, 201);
     assert.equal(result.headers["cache-control"], "no-store");
     assert.equal(result.body.transaction.type, "PAYMENT");
-    assert.equal(result.body.transaction.amount, "1000.31");
+    assert.equal(result.body.transaction.amount, "1025.81");
     assert.equal(result.body.transaction.cycle_id, "20");
     assert.equal(result.body.transaction.user_id, "11");
     assert.equal(result.body.transaction.description, "Member payment");
-    assert.deepEqual(result.body.entries.map(e => e.type), ["LOAN_PAYMENT", "BUY_SHARE", "PENALTY_PAYMENT"]);
+    assert.deepEqual(result.body.entries.map(e => e.type), ["LOAN_PAYMENT", "BUY_SHARE", "PENALTY_PAYMENT", "PAY_CONTRIBUTION"]);
     assert.equal(result.body.entries[0].description, "Loan repayment");
     assert.deepEqual(result.body.account_entries.map(p => [p.account_id, p.amount]), [
       ["101", "600.10"], ["102", "-600.10"], ["101", "300.20"], ["106", "-300.20"], ["101", "100.01"], ["107", "-100.01"],
+      ["101", "25.50"], ["109", "-25.50"],
     ]);
     for (const entry of result.body.entries) {
       assert.equal(entry.group_id, "1");
@@ -170,6 +173,7 @@ test("payments POST enforces component accounting roles", async t => {
     { credit: "102" }, { type: "LOAN_PAYMENT", credit: "106" },
     { type: "LOAN_PAYMENT", credit: "107" }, { type: "PENALTY_PAYMENT", credit: "102" },
     { type: "PENALTY_PAYMENT", credit: "106" },
+    { type: "PAY_CONTRIBUTION", credit: "102" },
   ]) assert.equal((await post(component(changes))).status, 400);
   state.accounts[1].type = "INCOME";
   assert.equal((await post(component({ type: "LOAN_PAYMENT", credit: "102" }))).status, 400);
@@ -177,6 +181,8 @@ test("payments POST enforces component accounting roles", async t => {
   assert.equal((await post(component({ type: "PENALTY_PAYMENT", credit: "107" }))).status, 400);
   state.accounts[4].type = "ASSET";
   assert.equal((await post(component({ type: "PENALTY_PAYMENT", credit: "108" }))).status, 400);
+  state.accounts[5].type = "INCOME";
+  assert.equal((await post(component({ type: "PAY_CONTRIBUTION", credit: "109" }))).status, 400);
   assert.equal(state.writes.length, 0);
 });
 
