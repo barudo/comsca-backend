@@ -85,7 +85,7 @@ class ContributionsHandler {
         for (let offset = 0; offset < members.length; offset += 1000) {
           const batch = await trx("transaction_entries").insert(members.slice(offset, offset + 1000).map(member => ({
             group_id, transaction_id: header.id, cycle_id: cycle.id, user_id: member.user_id,
-            type: "CONTRIBUTION", amount: input.amount, description: input.description,
+            type: "CHARGE_CONTRIBUTION", amount: input.amount, description: input.description,
           }))).returning("*");
           entries.push(...batch);
           const postings = await trx("account_entries").insert(batch.flatMap(entry => [

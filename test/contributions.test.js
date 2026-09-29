@@ -82,7 +82,7 @@ test("charge creates a group header and balanced member entries for every financ
     assert.equal(result.body.account_entries.length, 6);
     for (const entry of result.body.entries) {
       assert.equal(entry.amount, "25.50");
-      assert.equal(entry.type, "CONTRIBUTION");
+      assert.equal(entry.type, "CHARGE_CONTRIBUTION");
       assert.equal(entry.group_id, "1");
       assert.equal(entry.cycle_id, "20");
       assert.equal(entry.transaction_id, result.body.transaction.id);
