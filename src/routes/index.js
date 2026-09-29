@@ -72,6 +72,7 @@ function createRouter(database) {
   router.put("/api/v1/users/me/password", authenticate, users.password.bind(users));
   router.get("/api/v1/cycles", authenticate, cycles.list.bind(cycles));
   router.get("/api/v1/cycles/accounts", authenticate, cycleAccounts.list.bind(cycleAccounts));
+  router.get(["/api/v1/cylces/members", "/api/v1/cycles/members"], authenticate, cycleMembers.list.bind(cycleMembers));
   router.post("/api/v1/cycles/members", authenticate, cycleMembers.create.bind(cycleMembers));
   router.post("/api/v1/contributions/charge", authenticate, contributions.create.bind(contributions));
   router.post("/api/v1/transactions/disburse-loans", authenticate, loanDisbursements.create.bind(loanDisbursements));

@@ -16,6 +16,57 @@ function memberIds(body) {
 }
 
 class CycleMembersHandler {
+  async list(request, response, next) {
+    try {
+      const result = await request.app.locals.database.transaction(async trx => {
+        // Authorization, cycle selection, roster and balances share one snapshot.
+        // The restricted group reader has no ledger grants; scope backend reads explicitly.
+        await trx.raw("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY");
+        const group_id = request.group.id;
+        const actor = await trx("users").where({ auth_user_id: request.authUser.id, group_id })
+          .first("id", "role");
+        if (!actor || !["OWNER", "ADMIN", "TREASURER", "AUDITOR"].includes(actor.role)) {
+          throw Object.assign(new Error("A financial role in this group is required to list member balances"), { status: 403 });
+        }
+        const cycle = await trx("cycles").where({ group_id })
+          .whereIn("status", ["active", "distributing"])
+          .orderBy("created_at", "desc").orderBy("id", "desc").first("id");
+        if (!cycle) return { success: true, current_cycle_id: null, members: [] };
+        const { rows: members } = await trx.raw(`
+          SELECT u.id, u.group_id, u.first_name, u.family_name, u.username,
+            u.email, u.phone, u.address, u.role, u.created_at, u.updated_at,
+            COALESCE(b.total_shares, 0.00)::text AS total_shares,
+            COALESCE(b.remaining_loan, 0.00)::text AS remaining_loan,
+            COALESCE(b.unpaid_penalties, 0.00)::text AS unpaid_penalties,
+            COALESCE(b.unpaid_contributions, 0.00)::text AS unpaid_contributions
+          FROM users u
+          JOIN cycle_members cm ON cm.user_id = u.id AND cm.cycle_id = ?
+          LEFT JOIN (
+            SELECT COALESCE(e.user_id, t.user_id) AS user_id,
+              SUM(CASE WHEN e.type = 'BUY_SHARE' THEN e.amount ELSE 0.00 END) AS total_shares,
+              SUM(CASE WHEN e.type = 'LOAN_DISBURSED' THEN e.amount
+                WHEN e.type = 'LOAN_PAYMENT' THEN -e.amount ELSE 0.00 END) AS remaining_loan,
+              SUM(CASE WHEN e.type = 'CHARGE_PENALTY' THEN e.amount
+                WHEN e.type = 'PENALTY_PAYMENT' THEN -e.amount ELSE 0.00 END) AS unpaid_penalties,
+              SUM(CASE WHEN e.type IN ('CHARGE_CONTRIBUTION', 'CONTRIBUTION') THEN e.amount
+                WHEN e.type = 'PAY_CONTRIBUTION' THEN -e.amount ELSE 0.00 END) AS unpaid_contributions
+            FROM transaction_entries e
+            JOIN transactions t ON t.id = e.transaction_id AND t.group_id = e.group_id
+            WHERE e.group_id = ? AND t.group_id = ? AND t.cycle_id = ?
+            GROUP BY COALESCE(e.user_id, t.user_id)
+          ) b ON b.user_id = u.id
+          WHERE u.group_id = ?
+          ORDER BY u.family_name, u.first_name, u.id
+        `, [cycle.id, group_id, group_id, cycle.id, group_id]);
+        return { success: true, current_cycle_id: cycle.id, members };
+      });
+      return response.json(result);
+    } catch (error) {
+      if (error.status === 403) return response.status(403).json({ success: false, error: error.message });
+      return next(error);
+    }
+  }
+
   async create(request, response, next) {
     try {
       const result = await request.app.locals.database.transaction(async trx => {
