@@ -78,6 +78,7 @@ class LoanDisbursementsHandler {
         const [header] = await trx("transactions").insert({ group_id, cycle_id, user_id: input.user_id,
           type: "LOAN_DISBURSED", amount: input.amount, description: input.description }).returning("id");
         const entries = await trx("transaction_entries").insert({ group_id, transaction_id: header.id,
+          user_id: input.user_id, cycle_id,
           type: "LOAN_DISBURSED", amount: input.amount, description: input.description }).returning("*");
         const account_entries = await trx("account_entries").insert([
           { group_id, transaction_entry_id: entries[0].id, account_id: input.debit, amount: input.amount },

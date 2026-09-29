@@ -74,6 +74,8 @@ test("loan disbursements POST creates one member component with balanced posting
     assert.equal(entry.type, "LOAN_DISBURSED");
     assert.equal(entry.amount, "500.00");
     assert.equal(entry.group_id, "1");
+    assert.equal(entry.user_id, "11");
+    assert.equal(entry.cycle_id, "20");
     assert.equal(entry.transaction_id, result.body.transaction.id);
     assert.deepEqual(result.body.account_entries.map(p => [p.account_id, p.amount]), [["102", "500.00"], ["101", "-500.00"]]);
     assert.ok(result.body.account_entries.every(p => p.group_id === "1" && p.transaction_entry_id === entry.id));
