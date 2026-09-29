@@ -1047,3 +1047,41 @@ All records commit atomically. Repeating a successful request creates a new char
 Invalid input or numeric(18,2) overflow returns 400; insufficient role returns 403;
 accounts absent from the selected group return 404. Missing current cycle, an
 empty roster, or a concurrent integrity conflict returns 409 with no partial writes.
+
+### Charge penalties
+
+`POST /api/v1/penalties/charge` requires `Authorization: Bearer <token>`,
+`x-group-slug`, and `Content-Type: application/json`. The caller must be an
+OWNER, ADMIN, or TREASURER in the selected group.
+
+```json
+{
+  "amount": "10.00",
+  "debit": "101",
+  "credit": "102"
+}
+```
+
+The account values are illustrative database IDs, not account codes. `amount`
+is a positive per-member amount with at most two decimal places and must fit
+`numeric(18,2)`; the aggregate for the full roster must also fit. The charge
+applies to every member enrolled in the current cycle. `debit` must be the ID
+of Penalties Receivable (code 1300, ASSET), and `credit` must be the ID of
+Penalty Income (code 4100, INCOME). Both accounts must belong to the selected
+group and, if cycle-scoped, to the current cycle. Accounts must already exist.
+
+`description` is optional and limited to 4000 characters; other fields are
+rejected. The current cycle is the newest non-closed cycle, ordered by creation
+time and ID. For a draft cycle, use group-scoped accounts; cycle-specific
+default accounts are seeded when the cycle becomes active or distributing.
+A successful response is HTTP 201 with the transaction, member entries, and
+account postings. The transaction type is `PENALTY`; each enrolled member
+receives one `CHARGE_PENALTY` entry with their user and cycle IDs, plus a
+positive debit and matching negative credit. The transaction amount is the
+per-member amount multiplied by the enrolled roster. All records commit
+atomically; repeating a successful request creates a new charge.
+
+Invalid input or aggregate overflow returns 400; insufficient role returns
+403; accounts absent from the selected group return 404. Missing current cycle,
+an empty roster, or a concurrent integrity conflict returns 409 with no partial
+writes.

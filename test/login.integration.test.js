@@ -1123,6 +1123,61 @@ test("login and RLS isolate groups on a reused database connection", {
       } finally { if (!gate.isCompleted()) await gate.rollback(); if (pendingCharge) await pendingCharge; }
     } finally { await chargeDb.destroy(); await enrollDb.destroy(); }
   });
+  await t.test("POST penalties persists member entries and rolls back failed postings", async () => {
+    const [group] = await db("groups").insert({ name: "Penalties", slug: "penalty-charge" }).returning("id");
+    const authId = "adadadad-adad-4dad-8dad-adadadadadad";
+    await db("auth.users").insert({ id: authId });
+    const members = await db("users").insert([
+      { group_id: group.id, auth_user_id: authId, first_name: "Penalty", family_name: "Owner", role: "OWNER" },
+      { group_id: group.id, first_name: "Penalty", family_name: "Member", role: "MEMBER" },
+    ]).returning("id");
+    const [cycle] = await db("cycles").insert({ group_id: group.id, status: "active" }).returning("id");
+    await db("cycle_members").insert(members.map(member => ({ cycle_id: cycle.id, user_id: member.id })));
+    const accounts = await db("accounts").where({ group_id: group.id, cycle_id: cycle.id });
+    const debit = accounts.find(account => account.code === "1300");
+    const credit = accounts.find(account => account.code === "4100");
+    const handler = serverless(createApp(db, { getUser: async () => ({ id: authId }) }));
+    const event = () => ({ version: "2.0", rawPath: "/api/v1/penalties/charge",
+      headers: { "content-type": "application/json", authorization: "Bearer token", "x-group-slug": "penalty-charge" },
+      requestContext: { http: { method: "POST", sourceIp: "127.0.0.1" } },
+      body: JSON.stringify({ debit: debit.id, credit: credit.id, amount: "10.25" }), isBase64Encoded: false });
+    const post = async () => {
+      const result = await handler(event(), {});
+      return { status: result.statusCode, body: JSON.parse(result.body) };
+    };
+    const result = await post();
+    assert.equal(result.status, 201);
+    assert.equal(result.body.transaction.type, "PENALTY");
+    assert.equal(result.body.transaction.amount, "20.50");
+    assert.equal(result.body.transaction.user_id, null);
+    assert.equal(result.body.transaction.cycle_id, cycle.id);
+    const entries = await db("transaction_entries").where({ transaction_id: result.body.transaction.id }).orderBy("user_id");
+    assert.deepEqual(entries.map(entry => entry.user_id), members.map(member => member.id).sort((a, b) => a - b));
+    assert.ok(entries.every(entry => entry.type === "CHARGE_PENALTY" && entry.amount === "10.25" && entry.cycle_id === cycle.id));
+    const postings = await db("account_entries").whereIn("transaction_entry_id", entries.map(entry => entry.id));
+    assert.equal(postings.length, 4);
+    for (const entry of entries) {
+      assert.deepEqual(postings.filter(posting => posting.transaction_entry_id === entry.id)
+        .map(posting => [posting.account_id, posting.amount]).sort((a, b) => a[0] - b[0]),
+      [[debit.id, "10.25"], [credit.id, "-10.25"]].sort((a, b) => a[0] - b[0]));
+    }
+    const before = await Promise.all(["transactions", "transaction_entries", "account_entries"].map(async table =>
+      (await db(table).where({ group_id: group.id }).count("* as count").first()).count));
+    await db.raw(`CREATE FUNCTION public.reject_test_penalty_credit() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.account_id = ${credit.id} THEN RAISE EXCEPTION 'Test penalty posting rejection' USING ERRCODE='23514'; END IF; RETURN NEW; END $$;
+      CREATE TRIGGER test_penalty_failure BEFORE INSERT ON public.account_entries
+      FOR EACH ROW EXECUTE FUNCTION public.reject_test_penalty_credit();`);
+    try {
+      const failed = await post();
+      assert.equal(failed.status, 409);
+      assert.doesNotMatch(failed.body.error, /Test penalty posting rejection/);
+      const after = await Promise.all(["transactions", "transaction_entries", "account_entries"].map(async table =>
+        (await db(table).where({ group_id: group.id }).count("* as count").first()).count));
+      assert.deepEqual(after, before);
+    } finally {
+      await db.raw("DROP TRIGGER test_penalty_failure ON public.account_entries; DROP FUNCTION public.reject_test_penalty_credit()");
+    }
+  });
   await t.test("POST cycle members enrolls only group users in the current cycle", async () => {
     const [memberGroup] = await db("groups").insert({ name: "Enrollment", slug: "enrollment" }).returning("id");
     const enrollmentAuth = "99999999-9999-4999-8999-999999999999";
