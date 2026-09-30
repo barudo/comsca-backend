@@ -43,7 +43,7 @@ function reconstructBalances(events) {
     const userId = String(event.user_id);
     const balance = balances.get(userId) ?? { principal: 0n, interest: 0n };
     const amount = cents(event.amount);
-    if (event.type === "LOAN_DISBURSED") balance.principal += amount;
+    if (["LOAN_DISBURSED", "LOAN_DISBURSEMENT"].includes(event.type)) balance.principal += amount;
     if (event.type === "LOAN_INTEREST") balance.interest += amount;
     if (event.type === "LOAN_PAYMENT") {
       const interestPaid = amount < balance.interest ? amount : balance.interest;
@@ -111,8 +111,9 @@ class InterestsHandler {
           JOIN transactions t ON t.id = e.transaction_id AND t.group_id = e.group_id
           JOIN users u ON u.id = COALESCE(e.user_id, t.user_id) AND u.group_id = e.group_id
           JOIN cycle_members cm ON cm.user_id = u.id AND cm.cycle_id = t.cycle_id
-          WHERE e.group_id = ? AND t.group_id = ? AND e.cycle_id = ? AND t.cycle_id = ?
-            AND u.group_id = ? AND e.type IN ('LOAN_DISBURSED', 'LOAN_INTEREST', 'LOAN_PAYMENT')
+          WHERE e.group_id = ? AND t.group_id = ? AND t.cycle_id = ?
+            AND (e.cycle_id IS NULL OR e.cycle_id = ?) AND u.group_id = ?
+            AND e.type IN ('LOAN_DISBURSED', 'LOAN_DISBURSEMENT', 'LOAN_INTEREST', 'LOAN_PAYMENT')
           ORDER BY u.id, t.occurred_at, t.id, e.id
         `, [group_id, group_id, cycle.id, cycle.id, group_id]);
         const balances = reconstructBalances(events);

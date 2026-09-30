@@ -434,6 +434,37 @@ Errors: 400 invalid input/types/membership; 401 unauthenticated; 403 unauthorize
 writer; 404 reference not found in the selected group; 409 database constraint
 or concurrent-write conflict. No new migration is required for this endpoint.
 
+`POST /api/v1/interests/charge` charges one full configured interest period on
+each eligible member loan in the current active or distributing cycle. Only an
+OWNER, ADMIN or TREASURER of the selected group may charge. Supply the debit
+Loans Receivable asset account and the credit Interest Income account; both IDs
+must be distinct, belong to the selected group, and be either group-scoped or
+owned by the current cycle:
+
+```json
+{ "debit": "102", "credit": "108" }
+```
+
+The cycle must have `interest_rate`, `interest_period`, and `interest_method`
+configured. The rate is a percentage per period; DAILY, WEEKLY, MONTHLY, and
+YEARLY select the period but do not trigger elapsed-time calculations. SIMPLE
+applies the rate to outstanding principal. COMPOUND applies it to principal
+plus unpaid accrued interest. Each chronological `LOAN_PAYMENT` is applied to
+unpaid interest first, then principal. Each member's result is rounded to cents
+using PostgreSQL numeric rounding, and the header amount is the sum of those
+rounded member entries.
+
+Returns HTTP 201 with `{success:true,transaction,entries,account_entries}` after
+atomically writing one `LOAN_INTEREST` header, one positive member entry per
+borrower with chargeable rounded interest, and balanced debit/credit postings.
+Every successful request charges another full period; there is no elapsed-time
+check or duplicate suppression. Missing interest terms, no positive outstanding
+loan, or interest that rounds to zero returns 409 without writes. Invalid input
+or account types return 400, unauthenticated requests 401, unauthorized writers
+403, and accounts not found in the selected group 404. Database constraint and
+concurrency failures return 409 and roll back all records. No migration is
+required.
+
 `POST /api/v1/cycles/members` enrolls users into the selected group's current
 cycle (draft, active, or distributing). Requires a Bearer token, `x-group-slug`,
 and an OWNER or ADMIN profile in that group.

@@ -1017,6 +1017,102 @@ test("login and RLS isolate groups on a reused database connection", {
       await db.raw("DROP TRIGGER test_disbursement_credit_failure ON public.account_entries; DROP FUNCTION public.reject_test_disbursement_credit()");
     }
   });
+  await t.test("POST interest charges persist exact member amounts, scope accounts and roll back failures", async () => {
+    const [group] = await db("groups").insert({ name: "Interest", slug: "interest-charge" }).returning("id");
+    const authId = "dededede-dede-4ded-8ded-dededededede";
+    await db("auth.users").insert({ id: authId });
+    const [actor, member, smallLoanMember] = await db("users").insert([
+      { auth_user_id: authId, group_id: group.id, first_name: "Interest", family_name: "Treasurer", role: "TREASURER" },
+      { group_id: group.id, first_name: "Loan", family_name: "Member", role: "MEMBER" },
+      { group_id: group.id, first_name: "Small", family_name: "Loan", role: "MEMBER" },
+    ]).returning("id");
+    const [cycle] = await db("cycles").insert({ group_id: group.id, status: "active",
+      interest_rate: "2.500000", interest_period: "MONTHLY", interest_method: "SIMPLE" }).returning("id");
+    await db("cycle_members").insert([member, smallLoanMember].map(user => ({ cycle_id: cycle.id, user_id: user.id })));
+    const accounts = await db("accounts").where({ cycle_id: cycle.id });
+    const cash = accounts.find(account => account.code === "1000");
+    const loans = accounts.find(account => account.code === "1100");
+    const income = accounts.find(account => account.code === "4000");
+    async function ledgerEvent({ user, type, amount, debit, credit, occurred_at, entryUser = user, entryCycle = cycle.id,
+      headerType = type }) {
+      await db.transaction(async trx => {
+        const [header] = await trx("transactions").insert({ group_id: group.id, cycle_id: cycle.id, user_id: user,
+          type: headerType, amount, occurred_at }).returning("id");
+        const [entry] = await trx("transaction_entries").insert({ group_id: group.id, transaction_id: header.id,
+          user_id: entryUser, cycle_id: entryCycle, type, amount }).returning("id");
+        await trx("account_entries").insert([
+          { group_id: group.id, transaction_entry_id: entry.id, account_id: debit, amount },
+          { group_id: group.id, transaction_entry_id: entry.id, account_id: credit, amount: `-${amount}` },
+        ]);
+      });
+    }
+    await ledgerEvent({ user: member.id, entryUser: null, entryCycle: null, type: "LOAN_DISBURSED",
+      amount: "1000.00", debit: loans.id, credit: cash.id, occurred_at: "2026-09-01T00:00:00Z" });
+    await ledgerEvent({ user: member.id, type: "LOAN_INTEREST", amount: "80.00", debit: loans.id, credit: income.id,
+      occurred_at: "2026-09-02T00:00:00Z" });
+    await ledgerEvent({ user: member.id, type: "LOAN_PAYMENT", headerType: "PAYMENT", amount: "100.00",
+      debit: cash.id, credit: loans.id, occurred_at: "2026-09-03T00:00:00Z" });
+    await ledgerEvent({ user: smallLoanMember.id, type: "LOAN_DISBURSED", amount: "1.00", debit: loans.id,
+      credit: cash.id, occurred_at: "2026-09-01T00:00:00Z" });
+
+    const handler = serverless(createApp(db, { getUser: async () => ({ id: authId }) }));
+    const event = (body, slug = "interest-charge") => ({ version: "2.0", rawPath: "/api/v1/interests/charge",
+      rawQueryString: `group_id=${group.id}`,
+      headers: { "content-type": "application/json", authorization: "Bearer token", "x-group-slug": slug },
+      requestContext: { http: { method: "POST", sourceIp: "127.0.0.1" } },
+      body: JSON.stringify(body), isBase64Encoded: false });
+    const post = async (body = { debit: loans.id, credit: income.id }, slug) => {
+      const response = await handler(event(body, slug), {});
+      return { status: response.statusCode, body: JSON.parse(response.body) };
+    };
+    const charged = await post();
+    assert.equal(charged.status, 201);
+    assert.equal(charged.body.transaction.type, "LOAN_INTEREST");
+    assert.equal(charged.body.transaction.amount, "24.53");
+    assert.equal(charged.body.transaction.cycle_id, cycle.id);
+    assert.equal(charged.body.transaction.user_id, null);
+    assert.deepEqual(charged.body.entries.map(entry => [entry.user_id, entry.amount]),
+      [[member.id, "24.50"], [smallLoanMember.id, "0.03"]]);
+    const saved = await db("transactions").where({ id: charged.body.transaction.id }).first();
+    assert.equal(saved.amount, "24.53");
+    const savedEntries = await db("transaction_entries").where({ transaction_id: saved.id }).orderBy("user_id");
+    const postings = await db("account_entries").whereIn("transaction_entry_id", savedEntries.map(entry => entry.id)).orderBy("id");
+    assert.equal(postings.length, 4);
+    for (const entry of savedEntries) {
+      assert.deepEqual(postings.filter(posting => posting.transaction_entry_id === entry.id)
+        .map(posting => [posting.account_id, posting.amount]),
+      [[loans.id, entry.amount], [income.id, `-${entry.amount}`]]);
+    }
+    assert.equal((await post()).status, 201); // Repeated requests charge a new full period.
+    const foreignAccount = await db("accounts").whereNot({ group_id: group.id }).first("id");
+    assert.equal((await post({ debit: loans.id, credit: foreignAccount.id })).status, 404);
+
+    const counts = async () => Promise.all(["transactions", "transaction_entries", "account_entries"].map(async table =>
+      (await db(table).where({ group_id: group.id }).count("* as count").first()).count));
+    const before = await counts();
+    await db.raw(`CREATE FUNCTION public.reject_test_interest_credit() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.account_id = ${income.id} AND NEW.amount < 0 THEN
+        RAISE EXCEPTION 'Test interest posting rejection' USING ERRCODE='23514'; END IF; RETURN NEW; END $$;
+      CREATE TRIGGER test_interest_credit_failure BEFORE INSERT ON public.account_entries
+      FOR EACH ROW EXECUTE FUNCTION public.reject_test_interest_credit();`);
+    try {
+      const failed = await post();
+      assert.equal(failed.status, 409);
+      assert.doesNotMatch(failed.body.error, /Test interest posting rejection/);
+      assert.deepEqual(await counts(), before);
+      await db.raw(`DROP TRIGGER test_interest_credit_failure ON public.account_entries;
+        CREATE CONSTRAINT TRIGGER test_interest_credit_failure AFTER INSERT ON public.account_entries
+        DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.reject_test_interest_credit();`);
+      const commitFailure = await post();
+      assert.equal(commitFailure.status, 409);
+      assert.doesNotMatch(commitFailure.body.error, /Test interest posting rejection/);
+      assert.deepEqual(await counts(), before);
+    } finally {
+      await db.raw("DROP TRIGGER test_interest_credit_failure ON public.account_entries; DROP FUNCTION public.reject_test_interest_credit()");
+    }
+    await db("users").where({ id: actor.id }).update({ role: "AUDITOR" });
+    assert.equal((await post()).status, 403);
+  });
   await t.test("POST contributions persists members atomically and serializes roster and closure races", async () => {
     const [group] = await db("groups").insert({ name: "Contributions", slug: "contribution-charge" }).returning("id");
     const authId = "acacacac-acac-4cac-8cac-acacacacacac";

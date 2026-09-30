@@ -74,6 +74,7 @@ test("member balances aggregate actual PostgreSQL decimals and isolate membershi
   await post("BUY_SHARE", "9007199254740993.99");
   await post("BUY_SHARE", "0.02", { headerUser: null, entryUser: 11 });
   await post("LOAN_DISBURSED", "100.10"); // Header fallback, including null entry cycle.
+  await post("LOAN_INTEREST", "7.50", { entryUser: 11 });
   await post("LOAN_PAYMENT", "30.03", { entryUser: 11 });
   await post("CHARGE_PENALTY", "10.10", { headerUser: null, entryUser: 11 });
   await post("PENALTY_PAYMENT", "3.03", { entryUser: 11 });
@@ -101,7 +102,7 @@ test("member balances aggregate actual PostgreSQL decimals and isolate membershi
   assert.equal(result.current_cycle_id, "20");
   assert.deepEqual(result.members.map(m => m.id), ["11", "13", "12"]);
   const balances = member => [member.total_shares, member.remaining_loan, member.unpaid_penalties, member.unpaid_contributions];
-  assert.deepEqual(balances(result.members[0]), ["9007199254740994.01", "70.07", "7.07", "19.80"]);
+  assert.deepEqual(balances(result.members[0]), ["9007199254740994.01", "77.57", "7.07", "19.80"]);
   assert.deepEqual(balances(result.members[1]), ["0.00", "0.00", "0.00", "0.00"]);
   assert.deepEqual(balances(result.members[2]), ["0.00", "-1.01", "-2.02", "-3.03"]);
   assert.deepEqual(Object.keys(result.members[0]).sort(), ["id", "group_id", "first_name", "family_name", "username",

@@ -36,6 +36,7 @@ function fixture(t) {
     assert.match(q.sql, /WHERE u.group_id = \?/);
     assert.match(q.sql, /ORDER BY u.family_name, u.first_name, u.id/);
     assert.match(q.sql, /COALESCE\(e.user_id, t.user_id\)/);
+    assert.match(q.sql, /LOAN_INTEREST/);
     assert.doesNotMatch(q.sql, /account_entries|password|auth_user_id|SELECT \*/i);
     assert.deepEqual(q.bindings, ["20", "1", "1", "20", "1"]);
     return { rows: members };

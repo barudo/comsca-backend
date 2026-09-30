@@ -44,7 +44,7 @@ class CycleMembersHandler {
           LEFT JOIN (
             SELECT COALESCE(e.user_id, t.user_id) AS user_id,
               SUM(CASE WHEN e.type = 'BUY_SHARE' THEN e.amount ELSE 0.00 END) AS total_shares,
-              SUM(CASE WHEN e.type = 'LOAN_DISBURSED' THEN e.amount
+              SUM(CASE WHEN e.type IN ('LOAN_DISBURSED', 'LOAN_DISBURSEMENT', 'LOAN_INTEREST') THEN e.amount
                 WHEN e.type = 'LOAN_PAYMENT' THEN -e.amount ELSE 0.00 END) AS remaining_loan,
               SUM(CASE WHEN e.type = 'CHARGE_PENALTY' THEN e.amount
                 WHEN e.type = 'PENALTY_PAYMENT' THEN -e.amount ELSE 0.00 END) AS unpaid_penalties,
