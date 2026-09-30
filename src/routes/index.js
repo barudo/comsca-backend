@@ -40,23 +40,44 @@ function createRouter(database) {
   const auth = new SupabaseAuthHandler();
 
   // Include early JSON/group errors in the current-user update cache policy.
-  router.use(["/api/v1/users/me", "/api/v1/users/me/password"], (request, response, next) => {
-    if (request.method === "PUT") response.set("Cache-Control", "no-store");
-    next();
-  });
+  router.use(
+    ["/api/v1/users/me", "/api/v1/users/me/password"],
+    (request, response, next) => {
+      if (request.method === "PUT") response.set("Cache-Control", "no-store");
+      next();
+    },
+  );
 
   const publicRoutes = express.Router();
   // Verify webhook signatures against the original bytes before JSON parsing.
-  publicRoutes.use("/api/v1/hooks", express.raw({ type: "application/json", limit: "32kb" }));
+  publicRoutes.use(
+    "/api/v1/hooks",
+    express.raw({ type: "application/json", limit: "32kb" }),
+  );
   publicRoutes.post("/api/v1/hooks/sms", hooks.sms.bind(hooks));
   publicRoutes.use(express.json({ limit: "32kb" }));
 
   // Registration and authentication resolve identity without a group header.
-  publicRoutes.post("/api/v1/user/register", registration.register.bind(registration));
-  publicRoutes.post("/api/v1/user/verify", registration.verify.bind(registration));
-  publicRoutes.get("/api/v1/groups/validate-slug", groups.validateSlug.bind(groups));
-  publicRoutes.post("/api/v1/auth/login/password", auth.loginPassword.bind(auth));
-  publicRoutes.post("/api/v1/auth/login/otp/request", auth.requestOtp.bind(auth));
+  publicRoutes.post(
+    "/api/v1/user/register",
+    registration.register.bind(registration),
+  );
+  publicRoutes.post(
+    "/api/v1/user/verify",
+    registration.verify.bind(registration),
+  );
+  publicRoutes.get(
+    "/api/v1/groups/validate-slug",
+    groups.validateSlug.bind(groups),
+  );
+  publicRoutes.post(
+    "/api/v1/auth/login/password",
+    auth.loginPassword.bind(auth),
+  );
+  publicRoutes.post(
+    "/api/v1/auth/login/otp/request",
+    auth.requestOtp.bind(auth),
+  );
   publicRoutes.post("/api/v1/auth/login/otp/verify", auth.verifyOtp.bind(auth));
   publicRoutes.post("/api/v1/auth/refresh", auth.refresh.bind(auth));
   publicRoutes.post("/api/v1/auth/logout", auth.logout.bind(auth));
@@ -65,24 +86,74 @@ function createRouter(database) {
   router.use(publicRoutes);
 
   router.use(groupSlugMiddleware(database));
-  router.get("/api/v1/groups/users", authenticate, groupUserList.list.bind(groupUserList));
-  router.post("/api/v1/groups/users/:id/account",
-    authenticate, groupUserAccounts.create.bind(groupUserAccounts));
-  router.post(["/api/v1/user", "/api/v1/groups/users"],
-    authenticate, groupUsers.create.bind(groupUsers));
-  router.put("/api/v1/groups/users/:id", authenticate, groupUsers.update.bind(groupUsers));
+  router.get(
+    "/api/v1/groups/users",
+    authenticate,
+    groupUserList.list.bind(groupUserList),
+  );
+  router.post(
+    "/api/v1/groups/users/:id/account",
+    authenticate,
+    groupUserAccounts.create.bind(groupUserAccounts),
+  );
+  router.post(
+    ["/api/v1/user", "/api/v1/groups/users"],
+    authenticate,
+    groupUsers.create.bind(groupUsers),
+  );
+  router.put(
+    "/api/v1/groups/users/:id",
+    authenticate,
+    groupUsers.update.bind(groupUsers),
+  );
   router.get("/api/v1/users/me", authenticate, users.me.bind(users));
   router.put("/api/v1/users/me", authenticate, users.update.bind(users));
-  router.put("/api/v1/users/me/password", authenticate, users.password.bind(users));
+  router.put(
+    "/api/v1/users/me/password",
+    authenticate,
+    users.password.bind(users),
+  );
   router.get("/api/v1/cycles", authenticate, cycles.list.bind(cycles));
-  router.get("/api/v1/cycles/accounts", authenticate, cycleAccounts.list.bind(cycleAccounts));
-  router.get(["/api/v1/cylces/members", "/api/v1/cycles/members"], authenticate, cycleMembers.list.bind(cycleMembers));
-  router.post("/api/v1/cycles/members", authenticate, cycleMembers.create.bind(cycleMembers));
-  router.post("/api/v1/contributions/charge", authenticate, contributions.create.bind(contributions));
-  router.post("/api/v1/penalties/charge", authenticate, penalties.create.bind(penalties));
-  router.post("/api/v1/interests/charge", authenticate, interests.charge.bind(interests));
-  router.post("/api/v1/transactions/disburse-loans", authenticate, loanDisbursements.create.bind(loanDisbursements));
-  router.post("/api/v1/transactions/payments", authenticate, paymentTransactions.create.bind(paymentTransactions));
+  router.get(
+    "/api/v1/cycles/accounts",
+    authenticate,
+    cycleAccounts.list.bind(cycleAccounts),
+  );
+  router.get(
+    ["/api/v1/cylces/members", "/api/v1/cycles/members"],
+    authenticate,
+    cycleMembers.list.bind(cycleMembers),
+  );
+  router.post(
+    "/api/v1/cycles/members",
+    authenticate,
+    cycleMembers.create.bind(cycleMembers),
+  );
+  router.post(
+    "/api/v1/contributions/charge",
+    authenticate,
+    contributions.create.bind(contributions),
+  );
+  router.post(
+    "/api/v1/penalties/charge",
+    authenticate,
+    penalties.create.bind(penalties),
+  );
+  router.post(
+    "/api/v1/interests/charge",
+    authenticate,
+    interests.charge.bind(interests),
+  );
+  router.post(
+    "/api/v1/transactions/disburse-loans",
+    authenticate,
+    loanDisbursements.create.bind(loanDisbursements),
+  );
+  router.post(
+    "/api/v1/transactions/payments",
+    authenticate,
+    paymentTransactions.create.bind(paymentTransactions),
+  );
   router.post("/api/v1/cycles", authenticate, cycles.create.bind(cycles));
   router.put("/api/v1/cycles/:id", authenticate, cycles.update.bind(cycles));
   router.patch("/api/v1/cycles/:id", authenticate, cycles.update.bind(cycles));
