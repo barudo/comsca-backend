@@ -6,6 +6,7 @@ const CycleAccountsHandler = require("../handlers/cycle-accounts");
 const CycleMembersHandler = require("../handlers/cycle-members");
 const ContributionsHandler = require("../handlers/contributions");
 const PenaltiesHandler = require("../handlers/penalties");
+const InterestsHandler = require("../handlers/interests");
 const LoanDisbursementsHandler = require("../handlers/loan-disbursements");
 const PaymentTransactionsHandler = require("../handlers/payment-transactions");
 const GroupUsersHandler = require("../handlers/group-users");
@@ -25,6 +26,7 @@ function createRouter(database) {
   const cycleMembers = new CycleMembersHandler();
   const contributions = new ContributionsHandler();
   const penalties = new PenaltiesHandler();
+  const interests = new InterestsHandler();
   const loanDisbursements = new LoanDisbursementsHandler();
   const paymentTransactions = new PaymentTransactionsHandler();
   const groupUsers = new GroupUsersHandler();
@@ -78,6 +80,7 @@ function createRouter(database) {
   router.post("/api/v1/cycles/members", authenticate, cycleMembers.create.bind(cycleMembers));
   router.post("/api/v1/contributions/charge", authenticate, contributions.create.bind(contributions));
   router.post("/api/v1/penalties/charge", authenticate, penalties.create.bind(penalties));
+  router.post("/api/v1/interests/charge", authenticate, interests.charge.bind(interests));
   router.post("/api/v1/transactions/disburse-loans", authenticate, loanDisbursements.create.bind(loanDisbursements));
   router.post("/api/v1/transactions/payments", authenticate, paymentTransactions.create.bind(paymentTransactions));
   router.post("/api/v1/cycles", authenticate, cycles.create.bind(cycles));
