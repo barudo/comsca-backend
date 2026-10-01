@@ -683,6 +683,22 @@ header, `401` for missing or invalid authentication, `404` for an unknown group,
 and `403` if the caller has no linked profile in the selected group. Provider
 failures return `429`, `502`, or `503` as appropriate.
 
+`GET /api/v1/me/transactions` returns all transaction entries associated with
+the authenticated user in the selected group's current active or distributing
+cycle, ordered by transaction time newest first. If the group has no active or
+distributing cycle, `data` is an empty array. The response is
+`{ "success": true, "data": [...] }`; each entry includes its IDs, resolved
+`user_id`, cycle, type, exact decimal-string amount, description, and timestamps.
+Each entry also includes `transaction_occurred_at` from its parent transaction.
+For legacy entries without an entry-level `user_id` or `cycle_id`, ownership and
+cycle fall back to the parent transaction. The endpoint requires migrations through
+`027_add_contribution_member_entries.js`. The verified bearer token determines
+the user; query parameters cannot change user or group scope. A missing linked
+profile returns 403; missing group header, authentication, and unknown group
+use the usual 400, 401, and 404 responses. Authenticated responses use
+`Cache-Control: no-store`; group-resolution errors may be returned before
+authentication.
+
 ### Update your profile
 
 `PUT /api/v1/users/me` updates the authenticated user's profile in the selected

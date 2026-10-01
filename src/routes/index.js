@@ -5,6 +5,7 @@ const CyclesHandler = require("../handlers/cycles");
 const CycleAccountsHandler = require("../handlers/cycle-accounts");
 const CycleMembersHandler = require("../handlers/cycle-members");
 const DashboardHandler = require("../handlers/dashboard");
+const MeTransactionsHandler = require("../handlers/me-transactions");
 const ContributionsHandler = require("../handlers/contributions");
 const PenaltiesHandler = require("../handlers/penalties");
 const InterestsHandler = require("../handlers/interests");
@@ -26,6 +27,7 @@ function createRouter(database) {
   const cycleAccounts = new CycleAccountsHandler();
   const cycleMembers = new CycleMembersHandler();
   const dashboard = new DashboardHandler();
+  const meTransactions = new MeTransactionsHandler();
   const contributions = new ContributionsHandler();
   const penalties = new PenaltiesHandler();
   const interests = new InterestsHandler();
@@ -109,6 +111,11 @@ function createRouter(database) {
     groupUsers.update.bind(groupUsers),
   );
   router.get("/api/v1/users/me", authenticate, users.me.bind(users));
+  router.get(
+    "/api/v1/me/transactions",
+    authenticate,
+    meTransactions.list.bind(meTransactions),
+  );
   router.put("/api/v1/users/me", authenticate, users.update.bind(users));
   router.put(
     "/api/v1/users/me/password",

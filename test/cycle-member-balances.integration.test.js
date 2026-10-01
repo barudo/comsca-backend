@@ -2,6 +2,7 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const knex = require("knex");
 const CycleMembersHandler = require("../src/handlers/cycle-members");
+const MeTransactionsHandler = require("../src/handlers/me-transactions");
 
 test(
   "member balances aggregate actual PostgreSQL decimals and isolate membership, groups and cycles",
@@ -132,7 +133,7 @@ test(
       amount,
       { group = 1, cycle = 20, headerUser = 11, entryUser = null } = {},
     ) {
-      await db.transaction(async (trx) => {
+      return db.transaction(async (trx) => {
         const [header] = await trx("transactions")
           .insert({
             group_id: group,
@@ -169,9 +170,10 @@ test(
             amount: `-${amount}`,
           },
         ]);
+        return entry.id;
       });
     }
-    await post("BUY_SHARE", "9007199254740993.99");
+    const legacyShareId = await post("BUY_SHARE", "9007199254740993.99");
     await post("BUY_SHARE", "0.02", { headerUser: null, entryUser: 11 });
     await post("LOAN_DISBURSED", "100.10"); // Header fallback, including null entry cycle.
     await post("LOAN_INTEREST", "7.50", { entryUser: 11 });
@@ -215,6 +217,32 @@ test(
       return body;
     }
     const result = await report();
+    let transactions;
+    await new MeTransactionsHandler().list(
+      {
+        app: { locals: { database: db } },
+        group: { id: "1" },
+        authUser: { id: "secret-auth" },
+      },
+      {
+        json(value) {
+          transactions = value;
+        },
+      },
+      (error) => {
+        throw error;
+      },
+    );
+    const legacyShare = transactions.data.find(
+      (entry) => String(entry.id) === String(legacyShareId),
+    );
+    assert.equal(legacyShare.user_id, "11");
+    assert.equal(legacyShare.transaction_occurred_at instanceof Date, true);
+    assert.ok(
+      transactions.data.every(
+        (entry) => String(entry.group_id) === "1" && String(entry.user_id) === "11" && String(entry.cycle_id) === "20",
+      ),
+    );
     assert.equal(result.current_cycle_id, "20");
     assert.deepEqual(
       result.members.map((m) => m.id),
