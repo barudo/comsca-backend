@@ -516,6 +516,40 @@ and cycle-less group accounts are excluded. This endpoint returns definitions,
 not calculated balances. Responses are not cacheable. Missing authentication is
 401; an unauthorized role or membership is 403.
 
+### Dashboard
+
+`GET /api/v1/dashboard` returns financial and membership totals for the selected
+group's current active or distributing cycle. It requires a Bearer token and
+`x-group-slug`; OWNER, ADMIN, TREASURER, and AUDITOR are allowed. Group and cycle
+query parameters do not change the resolved scope.
+
+```json
+{
+  "success": true,
+  "current_cycle_id": "20",
+  "cash_on_hand": "1000.00",
+  "outstanding_loans": "500.00",
+  "total_fund_value": "1500.00",
+  "share_capital": "300.00",
+  "contributions_collected": "200.00",
+  "contributions_due": "50.00",
+  "active_members": 4
+}
+```
+
+Monetary values are exact decimal strings. Cash on Hand is the balance of the
+cycle's Cash account (code `1000`). Outstanding Loans are loan disbursements and
+interest less loan payments. Total Fund Value sums balances of all cycle ASSET
+accounts, including receivables and excluding liabilities. Share Capital sums
+`BUY_SHARE`; Contributions Collected sums `PAY_CONTRIBUTION`; Contributions Due
+sums `CHARGE_CONTRIBUTION` and legacy `CONTRIBUTION`, less `PAY_CONTRIBUTION`.
+Active Members counts enrollments in that cycle. With no active or distributing
+cycle, `current_cycle_id` is null and all monetary totals are `"0.00"` with
+`active_members: 0`. Missing/invalid authentication returns 401; a missing
+financial role in the selected group returns 403. A missing group header
+returns 400, and an unknown group slug returns 404. Responses use
+`Cache-Control: no-store`.
+
 Migration `023_add_transaction_document_numbers.js` adds nullable `document_type`
 and `document_number` fields to transactions. Both must be present together or
 both absent. Types are `RECEIPT`, `DISBURSEMENT_VOUCHER`, and `JOURNAL_VOUCHER`;

@@ -4,6 +4,7 @@ const groupSlugMiddleware = require("../middleware/group-slug");
 const CyclesHandler = require("../handlers/cycles");
 const CycleAccountsHandler = require("../handlers/cycle-accounts");
 const CycleMembersHandler = require("../handlers/cycle-members");
+const DashboardHandler = require("../handlers/dashboard");
 const ContributionsHandler = require("../handlers/contributions");
 const PenaltiesHandler = require("../handlers/penalties");
 const InterestsHandler = require("../handlers/interests");
@@ -24,6 +25,7 @@ function createRouter(database) {
   const cycles = new CyclesHandler();
   const cycleAccounts = new CycleAccountsHandler();
   const cycleMembers = new CycleMembersHandler();
+  const dashboard = new DashboardHandler();
   const contributions = new ContributionsHandler();
   const penalties = new PenaltiesHandler();
   const interests = new InterestsHandler();
@@ -114,6 +116,7 @@ function createRouter(database) {
     users.password.bind(users),
   );
   router.get("/api/v1/cycles", authenticate, cycles.list.bind(cycles));
+  router.get("/api/v1/dashboard", authenticate, dashboard.get.bind(dashboard));
   router.get(
     "/api/v1/cycles/accounts",
     authenticate,
