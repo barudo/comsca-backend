@@ -245,6 +245,62 @@ test('account ledger conversion, activation, concurrency and guarded rollback', 
       assert.deepEqual(await db('account_entries').orderBy('id'), postingsBeforeDown);
       const [restored] = await db('cycles').insert({group_id:group.id,status:'active'}).returning('id');
       assert.deepEqual(definitions(await db('accounts').where({cycle_id:restored.id})), expectedDefaults);
+      await db.transaction(trx => contributions.up(trx));
+      const assistance = require('../migrations/028_add_member_assistance_expense_account');
+      const beforeAssistanceAccounts = await db('accounts').orderBy('id');
+      const beforeAssistancePostings = await db('account_entries').orderBy('id');
+      await db.transaction(trx => assistance.up(trx));
+      assert.deepEqual(await db('accounts').orderBy('id'), beforeAssistanceAccounts);
+      assert.deepEqual(await db('account_entries').orderBy('id'), beforeAssistancePostings);
+      const assistanceExpected = [...expected, ['5100', 'Member Assistance Expense', 'EXPENSE']]
+        .sort((a, b) => a[0].localeCompare(b[0]));
+      const assistanceCycles = [];
+      for (const status of ['active', 'distributing']) {
+        const [cycle] = await db('cycles').insert({group_id:group.id}).returning('id');
+        assistanceCycles.push(cycle);
+        await db('cycles').where({id:cycle.id}).update({status});
+        const accounts = await db('accounts').where({cycle_id:cycle.id}).orderBy('id');
+        assert.equal(accounts.length, 13);
+        assert.deepEqual(definitions(accounts), assistanceExpected);
+        assert.ok(accounts.every(account => account.group_id === group.id && account.cycle_id === cycle.id));
+        await db('cycles').where({id:cycle.id}).update({status});
+        assert.deepEqual(await db('accounts').where({cycle_id:cycle.id}).orderBy('id'), accounts);
+      }
+      const [compatibleCycle] = await db('cycles').insert({group_id:group.id}).returning('id');
+      const [compatibleExpense] = await db('accounts').insert({group_id:group.id,cycle_id:compatibleCycle.id,
+        code:'5100',name:'Member Assistance Expense',type:'EXPENSE'}).returning('*');
+      await db('cycles').where({id:compatibleCycle.id}).update({status:'active'});
+      assert.equal((await db('accounts').where({cycle_id:compatibleCycle.id})).length, 13);
+      assert.deepEqual(await db('accounts').where({id:compatibleExpense.id}).first(), compatibleExpense);
+      const compatibleAccounts = await db('accounts').where({cycle_id:compatibleCycle.id}).orderBy('id');
+      await db('cycles').where({id:compatibleCycle.id}).update({status:'active'});
+      assert.deepEqual(await db('accounts').where({cycle_id:compatibleCycle.id}).orderBy('id'), compatibleAccounts);
+      const [conflictCycle] = await db('cycles').insert({group_id:group.id}).returning('id');
+      await db('accounts').insert({group_id:group.id,cycle_id:conflictCycle.id,
+        code:'5100',name:'Custom Assistance Expense',type:'EXPENSE'});
+      await assert.rejects(db('cycles').where({id:conflictCycle.id}).update({status:'active'}), {code:'23514'});
+      assert.equal((await db('cycles').where({id:conflictCycle.id}).first()).status, 'draft');
+      assert.equal((await db('accounts').where({cycle_id:conflictCycle.id})).length, 1);
+      const expense = (await db('accounts').where({cycle_id:assistanceCycles[0].id})).find(account => account.code === '5100');
+      await db.transaction(async trx => {
+        const [header] = await trx('transactions').insert({group_id:group.id,cycle_id:assistanceCycles[0].id,
+          type:'OTHER',amount:'10.00'}).returning('id');
+        const [entry] = await trx('transaction_entries').insert({group_id:group.id,transaction_id:header.id,
+          type:'OTHER',amount:'10.00'}).returning('id');
+        await trx('account_entries').insert([
+          {group_id:group.id,transaction_entry_id:entry.id,account_id:expense.id,amount:'10.00'},
+          {group_id:group.id,transaction_entry_id:entry.id,account_id:cash.id,amount:'-10.00'},
+        ]);
+      });
+      const beforeAssistanceDownAccounts = await db('accounts').orderBy('id');
+      const beforeAssistanceDownPostings = await db('account_entries').orderBy('id');
+      await db.transaction(trx => assistance.down(trx));
+      assert.deepEqual(await db('accounts').orderBy('id'), beforeAssistanceDownAccounts);
+      assert.deepEqual(await db('account_entries').orderBy('id'), beforeAssistanceDownPostings);
+      const [priorTemplateCycle] = await db('cycles').insert({group_id:group.id,status:'active'}).returning('id');
+      const priorTemplate = await db('accounts').where({cycle_id:priorTemplateCycle.id});
+      assert.equal(priorTemplate.length, 12);
+      assert.equal(priorTemplate.some(account => account.code === '5100'), false);
     });
     const postingsBeforeRollback = await db('account_entries').orderBy('id');
     const beforeRollback = await db('accounts').orderBy('id');

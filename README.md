@@ -277,10 +277,12 @@ nullable-cycle group accounts accept group or cycle activity. Account group/cycl
 ownership is immutable, and account codes are unique within their group/cycle scope.
 All ledger tables enable RLS. Migration `020_allow_cycle_accounts_read.js` grants group-scoped account reads to the restricted backend reader role; it grants no access to ledger postings.
 
-Activating a cycle atomically creates the following chart, also backfilled for
-existing active/distributing cycles. Newly created accounts start with zero balances; existing backfilled accounts retain their postings. Closed
-history is retained without a new chart or balance carryover. Repeated activation
-preserves existing accounts; incompatible reserved names/types abort activation.
+Activating a cycle atomically creates the following chart. Migration 019 also
+backfilled active/distributing cycles when cycle-account seeding was introduced;
+later chart migrations update future seeding only and do not backfill existing
+cycles. Newly created accounts start with zero balances. Closed history is
+retained without a new chart or balance carryover. Repeated activation preserves
+existing accounts; incompatible reserved names/types abort activation.
 
 | Code | Account | Type |
 | --- | --- | --- |
@@ -296,6 +298,7 @@ preserves existing accounts; incompatible reserved names/types abort activation.
 | 4300 | Donation Income | INCOME |
 | 4400 | Contribution Income | INCOME |
 | 5000 | Operating Expenses | EXPENSE |
+| 5100 | Member Assistance Expense | EXPENSE |
 
 Migration `025_remove_interest_receivable_from_cycle_defaults.js` removes Interest
 Receivable (1200) from the activation template, reducing it to ten accounts.
@@ -307,11 +310,17 @@ restored template, adding Interest Receivable if that cycle does not have it.
 
 Migration `026_add_contribution_cycle_accounts.js` adds Contributions Receivable
 (1400, ASSET) and Contribution Income (4400, INCOME), producing the twelve-account
-template above. The migration updates future seeding without backfilling existing
-cycles. Later activation or transition to distributing seeds any missing defaults.
-Rollback restores the ten-account template but preserves existing accounts and
-postings. Incompatible pre-existing definitions for these reserved codes cause
-activation to fail atomically rather than overwrite custom accounts.
+chart before Member Assistance Expense is added. The migration updates future
+seeding without backfilling existing cycles. Later activation or transition to
+distributing seeds any missing defaults. Rollback restores the ten-account
+template but preserves existing accounts and postings.
+
+Migration `028_add_member_assistance_expense_account.js` adds Member Assistance
+Expense (5100, EXPENSE), producing the thirteen-account chart above. It updates
+future seeding without backfilling existing cycles. Rollback restores the prior
+twelve-account template and preserves existing accounts and postings. Incompatible
+pre-existing definitions for reserved codes cause activation to fail atomically
+rather than overwrite custom accounts.
 
 For non-refundable contributions recorded as owed before collection, the intended
 posting is debit Contributions Receivable and credit Contribution Income. On
