@@ -4,6 +4,7 @@ const knex = require("knex");
 const DashboardHandler = require("../src/handlers/dashboard");
 const AccountingTrialBalanceHandler = require("../src/handlers/accounting-trial-balance");
 const AccountingBalanceSheetHandler = require("../src/handlers/accounting-balance-sheet");
+const AccountingIncomeStatementHandler = require("../src/handlers/accounting-income-statement");
 
 test(
   "dashboard calculates exact PostgreSQL totals and isolates group and cycle activity",
@@ -77,8 +78,10 @@ test(
       ["2000", "Accounts Payable", "LIABILITY"],
       ["3000", "Equity", "EQUITY"],
       ["4000", "Interest Income", "INCOME"],
+      ["4100", "Unused Income", "INCOME"],
       ["4400", "Contribution Income", "INCOME"],
       ["5000", "Operating Expenses", "EXPENSE"],
+      ["5100", "Unused Expenses", "EXPENSE"],
     ];
     const accountRows = await db("accounts")
       .insert(
@@ -113,6 +116,7 @@ test(
       group_id = 1,
       cycle_id = 20,
       user_id = 11,
+      occurred_at = "2026-01-01T00:00:00.000Z",
     }) {
       await db.transaction(async (trx) => {
         const [header] = await trx("transactions")
@@ -122,6 +126,7 @@ test(
             user_id,
             type: "PAYMENT",
             amount,
+            occurred_at,
           })
           .returning("id");
         const [entry] = await trx("transaction_entries")
@@ -168,6 +173,7 @@ test(
       amount: "7.50",
       debit: "1100",
       credit: "4000",
+      occurred_at: "2026-02-28T16:00:00.000Z",
     });
     await post({
       type: "LOAN_PAYMENT",
@@ -180,6 +186,7 @@ test(
       amount: "25.50",
       debit: "1400",
       credit: "4400",
+      occurred_at: "2026-03-02T00:00:00.000Z",
     });
     await post({
       type: "CONTRIBUTION",
@@ -198,6 +205,7 @@ test(
       amount: "10.00",
       debit: "5000",
       credit: "2000",
+      occurred_at: "2026-03-01T12:00:00.000Z",
     });
     await post({
       type: "BUY_SHARE",
@@ -219,6 +227,7 @@ test(
     const handler = new DashboardHandler();
     const trialBalanceHandler = new AccountingTrialBalanceHandler();
     const balanceSheetHandler = new AccountingBalanceSheetHandler();
+    const incomeStatementHandler = new AccountingIncomeStatementHandler();
     async function report() {
       let body;
       await handler.get(
@@ -261,6 +270,21 @@ test(
       return body;
     }
 
+    async function incomeStatementReport(query = {}) {
+      let body;
+      await incomeStatementHandler.get(
+        {
+          app: { locals: { database: db } },
+          group: { id: "1" },
+          authUser: { id: "actor" },
+          query,
+        },
+        { json(value) { body = value; } },
+        (error) => { throw error; },
+      );
+      return body;
+    }
+
     assert.deepEqual(await report(), {
       success: true,
       current_cycle_id: "20",
@@ -291,8 +315,10 @@ test(
         ["2000", "0.00", "10.00", "0.00", "10.00"],
         ["3000", "0.00", "300.25", "0.00", "300.25"],
         ["4000", "0.00", "7.50", "0.00", "7.50"],
+        ["4100", "0.00", "0.00", "0.00", "0.00"],
         ["4400", "0.00", "29.90", "0.00", "29.90"],
         ["5000", "10.00", "0.00", "10.00", "0.00"],
+        ["5100", "0.00", "0.00", "0.00", "0.00"],
       ],
     );
     assert.ok(
@@ -344,6 +370,76 @@ test(
       ["337.65", "10.00", "327.65", "337.65", "0.00"],
     );
 
+    const incomeStatement = await incomeStatementReport();
+    assert.equal(incomeStatement.current_cycle_id, "20");
+    assert.deepEqual(
+      incomeStatement.income.accounts.map(({ code, amount }) => [code, amount]),
+      [
+        ["4000", "7.50"],
+        ["4100", "0.00"],
+        ["4400", "29.90"],
+      ],
+    );
+    assert.ok(
+      incomeStatement.income.accounts.some(
+        (account) => account.code === "4100" && account.amount === "0.00",
+      ),
+    );
+    assert.deepEqual(
+      incomeStatement.expenses.accounts.map(({ code, amount }) => [code, amount]),
+      [["5000", "10.00"]],
+    );
+    assert.deepEqual(
+      [incomeStatement.total_income, incomeStatement.total_expenses, incomeStatement.net_income],
+      ["37.40", "10.00", "27.40"],
+    );
+
+    const dateBoundedIncomeStatement = await incomeStatementReport({
+      from: "2026-03-01",
+      to: "2026-03-01",
+    });
+    assert.deepEqual(
+      dateBoundedIncomeStatement.income.accounts.map(({ code, amount }) => [code, amount]),
+      [
+        ["4000", "7.50"],
+        ["4100", "0.00"],
+        ["4400", "0.00"],
+      ],
+    );
+    assert.deepEqual(
+      dateBoundedIncomeStatement.expenses.accounts.map(({ code, amount }) => [code, amount]),
+      [
+        ["5000", "10.00"],
+        ["5100", "0.00"],
+      ],
+    );
+    assert.deepEqual(
+      [dateBoundedIncomeStatement.total_income,
+        dateBoundedIncomeStatement.total_expenses,
+        dateBoundedIncomeStatement.net_income],
+      ["7.50", "10.00", "-2.50"],
+    );
+
+    const fromOnlyIncomeStatement = await incomeStatementReport({
+      from: "2026-03-01",
+    });
+    assert.deepEqual(
+      [fromOnlyIncomeStatement.total_income,
+        fromOnlyIncomeStatement.total_expenses,
+        fromOnlyIncomeStatement.net_income],
+      ["37.40", "10.00", "27.40"],
+    );
+
+    const toOnlyIncomeStatement = await incomeStatementReport({
+      to: "2026-03-01",
+    });
+    assert.deepEqual(
+      [toOnlyIncomeStatement.total_income,
+        toOnlyIncomeStatement.total_expenses,
+        toOnlyIncomeStatement.net_income],
+      ["7.50", "10.00", "-2.50"],
+    );
+
     await db("cycles").where({ id: 20 }).update({ status: "closed" });
     await db("cycles").insert({
       id: 22,
@@ -388,5 +484,25 @@ test(
       total_liabilities_and_equity: "0.00",
       difference: "0.00",
     });
+    const emptyIncomeStatement = await incomeStatementReport();
+    assert.equal(emptyIncomeStatement.current_cycle_id, "22");
+    assert.deepEqual(emptyIncomeStatement.income, { accounts: [], total: "0.00" });
+    assert.deepEqual(emptyIncomeStatement.expenses, { accounts: [], total: "0.00" });
+    assert.deepEqual(
+      [emptyIncomeStatement.total_income, emptyIncomeStatement.total_expenses,
+        emptyIncomeStatement.net_income],
+      ["0.00", "0.00", "0.00"],
+    );
+
+    await db("cycles").where({ id: 22 }).update({ status: "closed" });
+    const noCycleIncomeStatement = await incomeStatementReport();
+    assert.equal(noCycleIncomeStatement.current_cycle_id, null);
+    assert.deepEqual(noCycleIncomeStatement.income, { accounts: [], total: "0.00" });
+    assert.deepEqual(noCycleIncomeStatement.expenses, { accounts: [], total: "0.00" });
+    assert.deepEqual(
+      [noCycleIncomeStatement.total_income, noCycleIncomeStatement.total_expenses,
+        noCycleIncomeStatement.net_income],
+      ["0.00", "0.00", "0.00"],
+    );
   },
 );

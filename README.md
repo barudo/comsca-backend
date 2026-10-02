@@ -596,6 +596,50 @@ values are `"0.00"`. Monetary values are exact decimal strings. Missing
 authentication returns 401; a caller without an allowed role in the selected
 group returns 403. No migration is required.
 
+### Income Statement
+
+`GET /api/v1/accounting/income-statement` returns journal-derived income and
+expense amounts for the selected group's active or distributing cycle. Supply
+`Authorization: Bearer <access_token>` and `x-group-slug`. OWNER, ADMIN,
+TREASURER, and AUDITOR are allowed; client-supplied group or cycle parameters do
+not change the resolved scope.
+
+Optional `from` and `to` query parameters use the exact `YYYY-MM-DD` format.
+Each supplied bound is inclusive in Asia/Manila calendar time and filters on
+the transaction's business `occurred_at` timestamp. Either bound may be omitted;
+without bounds, all journal entries attached to the selected cycle are included.
+A malformed date or a `from` date later than `to` returns HTTP 400.
+
+```json
+{
+  "success": true,
+  "current_cycle_id": "20",
+  "income": {
+    "accounts": [
+      { "id": "400", "code": "4000", "name": "Interest Income", "amount": "250.00" },
+      { "id": "410", "code": "4100", "name": "Other Income", "amount": "0.00" }
+    ],
+    "total": "250.00"
+  },
+  "expenses": {
+    "accounts": [{ "id": "500", "code": "5000", "name": "Operating Expenses", "amount": "40.00" }],
+    "total": "40.00"
+  },
+  "total_income": "250.00",
+  "total_expenses": "40.00",
+  "net_income": "210.00"
+}
+```
+
+All INCOME and EXPENSE accounts in the selected cycle are returned, including
+accounts with no postings. Income is credit-normal; expenses are debit-normal.
+Accounts are ordered by code, then ID, within each section. Section amounts and
+totals remain exact decimal strings. With no active or
+distributing cycle, `current_cycle_id` is null and both sections and all totals
+are empty or `"0.00"`. Missing or invalid authentication returns 401; a caller
+without an allowed role in the selected group returns 403. No migration is
+required.
+
 ### Dashboard
 
 `GET /api/v1/dashboard` returns financial and membership totals for the selected

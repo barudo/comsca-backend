@@ -6,6 +6,7 @@ const CycleAccountsHandler = require("../handlers/cycle-accounts");
 const AccountingAccountsHandler = require("../handlers/accounting-accounts");
 const AccountingTrialBalanceHandler = require("../handlers/accounting-trial-balance");
 const AccountingBalanceSheetHandler = require("../handlers/accounting-balance-sheet");
+const AccountingIncomeStatementHandler = require("../handlers/accounting-income-statement");
 const CycleMembersHandler = require("../handlers/cycle-members");
 const DashboardHandler = require("../handlers/dashboard");
 const MeTransactionsHandler = require("../handlers/me-transactions");
@@ -31,6 +32,7 @@ function createRouter(database) {
   const accountingAccounts = new AccountingAccountsHandler();
   const accountingTrialBalance = new AccountingTrialBalanceHandler();
   const accountingBalanceSheet = new AccountingBalanceSheetHandler();
+  const accountingIncomeStatement = new AccountingIncomeStatementHandler();
   const cycleMembers = new CycleMembersHandler();
   const dashboard = new DashboardHandler();
   const meTransactions = new MeTransactionsHandler();
@@ -149,6 +151,11 @@ function createRouter(database) {
     "/api/v1/accounting/balance-sheet",
     authenticate,
     accountingBalanceSheet.get.bind(accountingBalanceSheet),
+  );
+  router.get(
+    "/api/v1/accounting/income-statement",
+    authenticate,
+    accountingIncomeStatement.get.bind(accountingIncomeStatement),
   );
   router.get(
     ["/api/v1/cylces/members", "/api/v1/cycles/members"],
