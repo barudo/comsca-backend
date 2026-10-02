@@ -516,6 +516,44 @@ and cycle-less group accounts are excluded. This endpoint returns definitions,
 not calculated balances. Responses are not cacheable. Missing authentication is
 401; an unauthorized role or membership is 403.
 
+### Balance Sheet
+
+`GET /api/v1/accounting/balance-sheet` returns journal-derived balances for the
+selected group's active or distributing cycle. Supply
+`Authorization: Bearer <access_token>` and `x-group-slug`. OWNER, ADMIN,
+TREASURER, and AUDITOR are allowed; request query parameters cannot override
+the group or cycle scope.
+
+```json
+{
+  "success": true,
+  "current_cycle_id": "20",
+  "assets": { "accounts": [{ "id": "100", "code": "1000", "name": "Cash", "balance": "1250.00" }], "total": "1250.00" },
+  "liabilities": { "accounts": [], "total": "0.00" },
+  "equity": {
+    "accounts": [{ "id": "300", "code": "3000", "name": "Equity", "balance": "1000.00" }],
+    "current_earnings": { "income": "250.00", "expenses": "0.00", "balance": "250.00" },
+    "total": "1250.00"
+  },
+  "total_assets": "1250.00",
+  "total_liabilities": "0.00",
+  "total_equity": "1250.00",
+  "total_liabilities_and_equity": "1250.00",
+  "difference": "0.00"
+}
+```
+
+Assets use debit-normal balances; liabilities and equity accounts use
+credit-normal balances. Equity includes actual EQUITY accounts plus current-cycle
+earnings, calculated as INCOME less EXPENSE balances, so the accounting equation
+holds before period closing. `difference` is Assets minus Liabilities and
+Equity. Without an active or distributing cycle, `current_cycle_id` is null;
+with a current cycle that has no accounts, its ID is returned. In either case,
+sections are empty and totals are `"0.00"`. Monetary values are exact decimal
+strings. Missing authentication returns 401; a caller without an allowed role
+in the selected group returns 403. Responses use `Cache-Control: no-store`. No
+migration is required.
+
 ### Trial Balance
 
 `GET /api/v1/accounting/trial-balance` returns journal-derived totals for each

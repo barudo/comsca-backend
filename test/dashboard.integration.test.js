@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const knex = require("knex");
 const DashboardHandler = require("../src/handlers/dashboard");
 const AccountingTrialBalanceHandler = require("../src/handlers/accounting-trial-balance");
+const AccountingBalanceSheetHandler = require("../src/handlers/accounting-balance-sheet");
 
 test(
   "dashboard calculates exact PostgreSQL totals and isolates group and cycle activity",
@@ -73,9 +74,11 @@ test(
       ["1100", "Loans Receivable", "ASSET"],
       ["1400", "Contributions Receivable", "ASSET"],
       ["1500", "Unused Receivable", "ASSET"],
+      ["2000", "Accounts Payable", "LIABILITY"],
       ["3000", "Equity", "EQUITY"],
       ["4000", "Interest Income", "INCOME"],
       ["4400", "Contribution Income", "INCOME"],
+      ["5000", "Operating Expenses", "EXPENSE"],
     ];
     const accountRows = await db("accounts")
       .insert(
@@ -191,6 +194,12 @@ test(
       credit: "1400",
     });
     await post({
+      type: "OPERATING_EXPENSE",
+      amount: "10.00",
+      debit: "5000",
+      credit: "2000",
+    });
+    await post({
       type: "BUY_SHARE",
       amount: "999.99",
       debit: "1000",
@@ -209,6 +218,7 @@ test(
 
     const handler = new DashboardHandler();
     const trialBalanceHandler = new AccountingTrialBalanceHandler();
+    const balanceSheetHandler = new AccountingBalanceSheetHandler();
     async function report() {
       let body;
       await handler.get(
@@ -226,6 +236,20 @@ test(
     async function trialBalanceReport() {
       let body;
       await trialBalanceHandler.get(
+        {
+          app: { locals: { database: db } },
+          group: { id: "1" },
+          authUser: { id: "actor" },
+        },
+        { json(value) { body = value; } },
+        (error) => { throw error; },
+      );
+      return body;
+    }
+
+    async function balanceSheetReport() {
+      let body;
+      await balanceSheetHandler.get(
         {
           app: { locals: { database: db } },
           group: { id: "1" },
@@ -264,9 +288,11 @@ test(
         ["1100", "107.60", "30.03", "77.57", "0.00"],
         ["1400", "29.90", "10.10", "19.80", "0.00"],
         ["1500", "0.00", "0.00", "0.00", "0.00"],
+        ["2000", "0.00", "10.00", "0.00", "10.00"],
         ["3000", "0.00", "300.25", "0.00", "300.25"],
         ["4000", "0.00", "7.50", "0.00", "7.50"],
         ["4400", "0.00", "29.90", "0.00", "29.90"],
+        ["5000", "10.00", "0.00", "10.00", "0.00"],
       ],
     );
     assert.ok(
@@ -275,10 +301,48 @@ test(
       ),
     );
     assert.deepEqual(trialBalance.summary, {
-      total_debits: "337.65",
-      total_credits: "337.65",
+      total_debits: "347.65",
+      total_credits: "347.65",
       difference: "0.00",
     });
+
+    const balanceSheet = await balanceSheetReport();
+    assert.equal(balanceSheet.current_cycle_id, "20");
+    assert.deepEqual(
+      balanceSheet.assets.accounts.map((account) => [
+        account.code,
+        account.balance,
+      ]),
+      [
+        ["1000", "240.28"],
+        ["1100", "77.57"],
+        ["1400", "19.80"],
+        ["1500", "0.00"],
+      ],
+    );
+    assert.deepEqual(balanceSheet.liabilities.accounts.map((account) => [
+      account.code,
+      account.balance,
+    ]), [["2000", "10.00"]]);
+    assert.deepEqual(balanceSheet.equity.accounts.map((account) => [
+      account.code,
+      account.balance,
+    ]), [["3000", "300.25"]]);
+    assert.deepEqual(balanceSheet.equity.current_earnings, {
+      income: "37.40",
+      expenses: "10.00",
+      balance: "27.40",
+    });
+    assert.deepEqual(
+      [
+        balanceSheet.total_assets,
+        balanceSheet.total_liabilities,
+        balanceSheet.total_equity,
+        balanceSheet.total_liabilities_and_equity,
+        balanceSheet.difference,
+      ],
+      ["337.65", "10.00", "327.65", "337.65", "0.00"],
+    );
 
     await db("cycles").where({ id: 20 }).update({ status: "closed" });
     await db("cycles").insert({
@@ -307,6 +371,22 @@ test(
         total_credits: "0.00",
         difference: "0.00",
       },
+    });
+    assert.deepEqual(await balanceSheetReport(), {
+      success: true,
+      current_cycle_id: "22",
+      assets: { accounts: [], total: "0.00" },
+      liabilities: { accounts: [], total: "0.00" },
+      equity: {
+        accounts: [],
+        current_earnings: { income: "0.00", expenses: "0.00", balance: "0.00" },
+        total: "0.00",
+      },
+      total_assets: "0.00",
+      total_liabilities: "0.00",
+      total_equity: "0.00",
+      total_liabilities_and_equity: "0.00",
+      difference: "0.00",
     });
   },
 );
