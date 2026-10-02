@@ -36,7 +36,7 @@ class MeTransactionsHandler {
           JOIN transactions t ON t.id = e.transaction_id AND t.group_id = e.group_id
           WHERE e.group_id = ? AND t.group_id = ?
             AND COALESCE(e.user_id, t.user_id) = ? AND t.cycle_id = ?
-          ORDER BY t.occurred_at DESC, t.id DESC, e.id DESC
+          ORDER BY t.occurred_at ASC, t.id ASC, e.id ASC
         `,
             [group_id, group_id, user.id, cycle.id],
           );

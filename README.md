@@ -685,7 +685,7 @@ failures return `429`, `502`, or `503` as appropriate.
 
 `GET /api/v1/me/transactions` returns all transaction entries associated with
 the authenticated user in the selected group's current active or distributing
-cycle, ordered by transaction time newest first. If the group has no active or
+cycle, ordered by transaction time oldest first. If the group has no active or
 distributing cycle, `data` is an empty array. The response is
 `{ "success": true, "data": [...] }`; each entry includes its IDs, resolved
 `user_id`, cycle, type, exact decimal-string amount, description, and timestamps.

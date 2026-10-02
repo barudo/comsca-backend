@@ -84,10 +84,14 @@ function fixture(t) {
       assert.match(query.sql, /t\.cycle_id = \?/);
       assert.match(query.sql, /COALESCE\(e\.cycle_id, t\.cycle_id\) AS cycle_id/);
       assert.match(query.sql, /t\.occurred_at AS transaction_occurred_at/);
-      assert.match(query.sql, /ORDER BY t\.occurred_at DESC, t\.id DESC, e\.id DESC/);
+      assert.match(query.sql, /ORDER BY t\.occurred_at ASC, t\.id ASC, e\.id ASC/);
       assert.deepEqual(query.bindings, ["1", "1", "11", "20"]);
       return {
-        rows: state.entries.filter((entry) => entry.cycle_id === state.cycle.id),
+        rows: state.entries
+          .filter((entry) => entry.cycle_id === state.cycle.id)
+          .sort((left, right) =>
+            left.transaction_occurred_at.localeCompare(right.transaction_occurred_at),
+          ),
       };
     },
   });
@@ -120,14 +124,18 @@ function fixture(t) {
   return { state, get };
 }
 
-test("GET current-user transactions returns only active-cycle entries newest first", async (t) => {
+test("GET current-user transactions returns only active-cycle entries oldest first", async (t) => {
   const { state, get } = fixture(t);
   const result = await get();
   assert.equal(result.status, 200);
   assert.equal(result.headers["cache-control"], "no-store");
   assert.deepEqual(result.body, {
     success: true,
-    data: state.entries.filter((entry) => entry.cycle_id === state.cycle.id),
+    data: state.entries
+      .filter((entry) => entry.cycle_id === state.cycle.id)
+      .sort((left, right) =>
+        left.transaction_occurred_at.localeCompare(right.transaction_occurred_at),
+      ),
   });
   assert.ok(result.body.data.every((entry) => entry.cycle_id === "20"));
 });
