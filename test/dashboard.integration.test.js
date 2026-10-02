@@ -2,6 +2,7 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const knex = require("knex");
 const DashboardHandler = require("../src/handlers/dashboard");
+const AccountingTrialBalanceHandler = require("../src/handlers/accounting-trial-balance");
 
 test(
   "dashboard calculates exact PostgreSQL totals and isolates group and cycle activity",
@@ -71,6 +72,7 @@ test(
       ["1000", "Cash", "ASSET"],
       ["1100", "Loans Receivable", "ASSET"],
       ["1400", "Contributions Receivable", "ASSET"],
+      ["1500", "Unused Receivable", "ASSET"],
       ["3000", "Equity", "EQUITY"],
       ["4000", "Interest Income", "INCOME"],
       ["4400", "Contribution Income", "INCOME"],
@@ -206,9 +208,24 @@ test(
     });
 
     const handler = new DashboardHandler();
+    const trialBalanceHandler = new AccountingTrialBalanceHandler();
     async function report() {
       let body;
       await handler.get(
+        {
+          app: { locals: { database: db } },
+          group: { id: "1" },
+          authUser: { id: "actor" },
+        },
+        { json(value) { body = value; } },
+        (error) => { throw error; },
+      );
+      return body;
+    }
+
+    async function trialBalanceReport() {
+      let body;
+      await trialBalanceHandler.get(
         {
           app: { locals: { database: db } },
           group: { id: "1" },
@@ -232,6 +249,37 @@ test(
       active_members: 2,
     });
 
+    const trialBalance = await trialBalanceReport();
+    assert.equal(trialBalance.current_cycle_id, "20");
+    assert.deepEqual(
+      trialBalance.accounts.map((account) => [
+        account.code,
+        account.total_debits,
+        account.total_credits,
+        account.debit_balance,
+        account.credit_balance,
+      ]),
+      [
+        ["1000", "340.38", "100.10", "240.28", "0.00"],
+        ["1100", "107.60", "30.03", "77.57", "0.00"],
+        ["1400", "29.90", "10.10", "19.80", "0.00"],
+        ["1500", "0.00", "0.00", "0.00", "0.00"],
+        ["3000", "0.00", "300.25", "0.00", "300.25"],
+        ["4000", "0.00", "7.50", "0.00", "7.50"],
+        ["4400", "0.00", "29.90", "0.00", "29.90"],
+      ],
+    );
+    assert.ok(
+      trialBalance.accounts.every(
+        (account) => account.id && account.name && account.type,
+      ),
+    );
+    assert.deepEqual(trialBalance.summary, {
+      total_debits: "337.65",
+      total_credits: "337.65",
+      difference: "0.00",
+    });
+
     await db("cycles").where({ id: 20 }).update({ status: "closed" });
     await db("cycles").insert({
       id: 22,
@@ -249,6 +297,16 @@ test(
       contributions_collected: "0.00",
       contributions_due: "0.00",
       active_members: 0,
+    });
+    assert.deepEqual(await trialBalanceReport(), {
+      success: true,
+      current_cycle_id: "22",
+      accounts: [],
+      summary: {
+        total_debits: "0.00",
+        total_credits: "0.00",
+        difference: "0.00",
+      },
     });
   },
 );

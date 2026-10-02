@@ -516,6 +516,48 @@ and cycle-less group accounts are excluded. This endpoint returns definitions,
 not calculated balances. Responses are not cacheable. Missing authentication is
 401; an unauthorized role or membership is 403.
 
+### Trial Balance
+
+`GET /api/v1/accounting/trial-balance` returns journal-derived totals for each
+account in the selected group's active or distributing cycle. Supply
+`Authorization: Bearer <access_token>` and `x-group-slug`. OWNER, ADMIN,
+TREASURER, and AUDITOR are allowed; request query parameters cannot override the
+group or cycle scope.
+
+```json
+{
+  "success": true,
+  "current_cycle_id": "20",
+  "accounts": [
+    {
+      "id": "100",
+      "code": "1000",
+      "name": "Cash",
+      "type": "ASSET",
+      "total_debits": "150.00",
+      "total_credits": "25.00",
+      "debit_balance": "125.00",
+      "credit_balance": "0.00"
+    }
+  ],
+  "summary": {
+    "total_debits": "125.00",
+    "total_credits": "0.00",
+    "difference": "125.00"
+  }
+}
+```
+
+`total_debits` and `total_credits` are gross journal postings for the account;
+`debit_balance` and `credit_balance` are its positive net balance on each side.
+Summary totals sum the net debit and credit balances, and `difference` is
+debits minus credits. A balanced ledger has equal summary totals and a zero
+difference. Accounts without postings are returned with zero values. With no
+active or distributing cycle, the response contains no accounts and all summary
+values are `"0.00"`. Monetary values are exact decimal strings. Missing
+authentication returns 401; a caller without an allowed role in the selected
+group returns 403. No migration is required.
+
 ### Dashboard
 
 `GET /api/v1/dashboard` returns financial and membership totals for the selected

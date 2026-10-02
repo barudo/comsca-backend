@@ -4,6 +4,7 @@ const groupSlugMiddleware = require("../middleware/group-slug");
 const CyclesHandler = require("../handlers/cycles");
 const CycleAccountsHandler = require("../handlers/cycle-accounts");
 const AccountingAccountsHandler = require("../handlers/accounting-accounts");
+const AccountingTrialBalanceHandler = require("../handlers/accounting-trial-balance");
 const CycleMembersHandler = require("../handlers/cycle-members");
 const DashboardHandler = require("../handlers/dashboard");
 const MeTransactionsHandler = require("../handlers/me-transactions");
@@ -27,6 +28,7 @@ function createRouter(database) {
   const cycles = new CyclesHandler();
   const cycleAccounts = new CycleAccountsHandler();
   const accountingAccounts = new AccountingAccountsHandler();
+  const accountingTrialBalance = new AccountingTrialBalanceHandler();
   const cycleMembers = new CycleMembersHandler();
   const dashboard = new DashboardHandler();
   const meTransactions = new MeTransactionsHandler();
@@ -135,6 +137,11 @@ function createRouter(database) {
     "/api/v1/accounting/accounts",
     authenticate,
     accountingAccounts.list.bind(accountingAccounts),
+  );
+  router.get(
+    "/api/v1/accounting/trial-balance",
+    authenticate,
+    accountingTrialBalance.get.bind(accountingTrialBalance),
   );
   router.get(
     ["/api/v1/cylces/members", "/api/v1/cycles/members"],
