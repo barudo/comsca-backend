@@ -49,7 +49,7 @@ function fixture(t) {
     if (q.method === "insert") {
       const rows = [builder._single.insert].flat().map((row, i) => ({ id: String(200 + state.writes.length + i), ...row }));
       state.writes.push({ table: builder._single.table, rows });
-      if (builder._single.table === "transactions") header = rows[0];
+      if (builder._single.table === "transactions") header = { occurred_at: "2026-10-03T08:12:34.567Z", ...rows[0] };
       return rows;
     }
     assert.match(q.sql, /from "transactions"/);
@@ -237,13 +237,12 @@ test("the replaced equity POST route returns 404", async t => {
   assert.equal(state.writes.length, 0);
 });
 
-test("donations POST records a balanced donation with Manila calendar midnight", async t => {
+test("donations POST records a balanced donation without a frontend date", async t => {
   const { state, post } = fixture(t);
   const result = await post({
     debit: "110",
     credit: "111",
     amount: "1250.05",
-    date: "2026-10-03",
     remarks: "Community donation",
   }, {}, undefined, "/api/v1/transactions/donations");
 
@@ -253,7 +252,9 @@ test("donations POST records a balanced donation with Manila calendar midnight",
   assert.equal(result.body.transaction.cycle_id, "20");
   assert.equal(result.body.transaction.user_id, null);
   assert.equal(result.body.transaction.description, "Community donation");
-  assert.equal(result.body.transaction.occurred_at, "2026-10-03T00:00:00+08:00");
+  assert.equal(result.body.transaction.occurred_at, "2026-10-03T08:12:34.567Z");
+  assert.ok(!Object.hasOwn(state.writes[0].rows[0], "occurred_at"));
+  assert.doesNotMatch(state.queries.find(query => query.sql.startsWith('insert into "transactions"')).sql, /occurred_at/);
   assert.equal(result.body.entries.length, 1);
   assert.equal(result.body.entries[0].amount, "1250.05");
   assert.equal(result.body.entries[0].description, "Community donation");
@@ -263,13 +264,13 @@ test("donations POST records a balanced donation with Manila calendar midnight",
   assert.match(state.queries.find(query => query.sql.includes('from "cycles"')).sql, /for update/);
 });
 
-test("donations POST validates aliases, amounts, dates, IDs and account rules before writing", async t => {
+test("donations POST validates aliases, amounts, IDs and account rules before writing", async t => {
   const { state, post } = fixture(t);
   const path = "/api/v1/transactions/donations";
   const donation = { debit: "110", credit: "111", amount: "10.00", date: "2026-10-03" };
   for (const changes of [
     { amount: 0 }, { amount: "0.00" }, { amount: "-1.00" }, { amount: "1.001" },
-    { amount: "10000000000000000.00" }, { date: "2026-02-30" }, { date: "2026-1-03" },
+    { amount: "10000000000000000.00" },
     { debit: "bad" }, { credit: "9223372036854775808" },
     { description: "one", remarks: "two" }, { extra: true },
   ]) {
@@ -324,5 +325,18 @@ test("donations POST rolls back and maps ledger persistence conflicts", async t 
     assert.equal(result.status, 409);
     assert.equal(state.writes.length, 0);
     assert.doesNotMatch(result.body.error, /private/);
+  }
+});
+
+
+test("donations POST ignores legacy dates and leaves timestamp assignment to the database", async t => {
+  const { state, post } = fixture(t);
+  for (const date of ["2000-01-01", "2099-12-31", "2026-02-30", "", null]) {
+    const result = await post({ debit: "110", credit: "111", amount: "10.00", date }, {}, undefined, "/api/v1/transactions/donations");
+    assert.equal(result.status, 201);
+    assert.equal(result.body.transaction.occurred_at, "2026-10-03T08:12:34.567Z");
+  }
+  for (const write of state.writes.filter(write => write.table === "transactions")) {
+    assert.ok(!Object.hasOwn(write.rows[0], "occurred_at"));
   }
 });

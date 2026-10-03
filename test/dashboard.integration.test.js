@@ -453,6 +453,7 @@ test(
     const donationHandler = new DonationsHandler();
     let donationStatus;
     let donationBody;
+    const beforeDonation = await db.raw("SELECT clock_timestamp() AS time");
     await donationHandler.create(
       {
         app: { locals: { database: db } },
@@ -462,7 +463,6 @@ test(
           debit: String(accountId(1, 20, "1000")),
           credit: String(donationIncomeAccount.id),
           amount: "42.75",
-          date: "2026-03-01",
           description: "Integration donation",
         },
       },
@@ -478,10 +478,17 @@ test(
       },
       (error) => { throw error; },
     );
+    const afterDonation = await db.raw("SELECT clock_timestamp() AS time");
     assert.equal(donationStatus, 201);
+    const occurredAt = new Date(donationBody.transaction.occurred_at).getTime();
+    assert.ok(occurredAt >= new Date(beforeDonation.rows[0].time).getTime());
+    assert.ok(occurredAt <= new Date(afterDonation.rows[0].time).getTime());
     assert.equal(donationBody.transaction.type, "DONATION");
     assert.equal(donationBody.transaction.amount, "42.75");
-    assert.equal(new Date(donationBody.transaction.occurred_at).toISOString(), "2026-02-28T16:00:00.000Z");
+    assert.equal(
+      new Date(donationBody.transaction.occurred_at).toISOString(),
+      new Date(donationBody.transaction.created_at).toISOString(),
+    );
     assert.equal(donationBody.entries.length, 1);
     assert.deepEqual(
       donationBody.account_entries

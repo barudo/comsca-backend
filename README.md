@@ -452,7 +452,6 @@ OWNER, ADMIN or TREASURER of that group can post.
   "debit": "101",
   "credit": "111",
   "amount": "1250.00",
-  "date": "2026-10-03",
   "description": "Community donation"
 }
 ```
@@ -461,9 +460,10 @@ Use account IDs from `GET /api/v1/cycles/accounts`. `debit` must identify an
 ASSET account and `credit` must be Donation Income (code `4300`, INCOME); both
 accounts must belong to the selected group and its current cycle. Amounts must
 be positive, have at most two decimal places, and fit `numeric(18,2)`. Send
-decimal strings for exact values. `date` is required in `YYYY-MM-DD` format and
-is interpreted as a calendar date in Asia/Manila; `occurred_at` is stored at
-midnight for that date in that timezone. Optional `description` or `remarks`
+decimal strings for exact values. `occurred_at` uses the current database server
+date and time, with no conversion to Manila time or truncation to midnight.
+No frontend date is required; a legacy `date` field is accepted but ignored.
+Optional `description` or `remarks`
 may contain up to 4000 characters; when both are supplied they must match.
 Unknown fields are rejected.
 
@@ -490,7 +490,7 @@ both saved postings in `account_entries`:
     "type": "DONATION",
     "amount": "1250.00",
     "description": "Community donation",
-    "occurred_at": "2026-10-02T16:00:00.000Z",
+    "occurred_at": "2026-10-03T08:00:00.000Z",
     "created_at": "2026-10-03T08:00:00.000Z",
     "updated_at": "2026-10-03T08:00:00.000Z"
   },

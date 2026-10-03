@@ -82,19 +82,6 @@ function donationInput(body) {
   const cents = BigInt(whole) * 100n + BigInt(fraction);
   if (cents === 0n) fail("amount must be greater than zero");
 
-  if (typeof body.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(body.date)) {
-    fail("date must be a valid YYYY-MM-DD calendar date");
-  }
-  const year = Number(body.date.slice(0, 4));
-  const parsedDate = new Date(`${body.date}T00:00:00.000Z`);
-  if (
-    year === 0 ||
-    Number.isNaN(parsedDate.getTime()) ||
-    parsedDate.toISOString().slice(0, 10) !== body.date
-  ) {
-    fail("date must be a valid YYYY-MM-DD calendar date");
-  }
-
   const hasDescription = Object.hasOwn(body, "description");
   const hasRemarks = Object.hasOwn(body, "remarks");
   if (hasDescription && hasRemarks && body.description !== body.remarks) {
@@ -105,7 +92,6 @@ function donationInput(body) {
     credit,
     amount: decimal(cents),
     description: description(hasDescription ? body.description : body.remarks),
-    occurred_at: `${body.date}T00:00:00+08:00`,
   };
 }
 
@@ -171,7 +157,6 @@ class DonationsHandler {
               type: "DONATION",
               amount: input.amount,
               description: input.description,
-              occurred_at: input.occurred_at,
             })
             .returning("id");
           const [component] = await trx("transaction_entries")
