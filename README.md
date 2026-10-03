@@ -443,6 +443,76 @@ Errors: 400 invalid input/types/membership; 401 unauthenticated; 403 unauthorize
 writer; 404 reference not found in the selected group; 409 database constraint
 or concurrent-write conflict. No new migration is required for this endpoint.
 
+`POST /api/v1/transactions/donations` records a group donation in the current
+active or distributing cycle. Supply a Bearer token and `x-group-slug`; only an
+OWNER, ADMIN or TREASURER of that group can post.
+
+```json
+{
+  "debit": "101",
+  "credit": "111",
+  "amount": "1250.00",
+  "date": "2026-10-03",
+  "description": "Community donation"
+}
+```
+
+Use account IDs from `GET /api/v1/cycles/accounts`. `debit` must identify an
+ASSET account and `credit` must be Donation Income (code `4300`, INCOME); both
+accounts must belong to the selected group and its current cycle. Amounts must
+be positive, have at most two decimal places, and fit `numeric(18,2)`. Send
+decimal strings for exact values. `date` is required in `YYYY-MM-DD` format and
+is interpreted as a calendar date in Asia/Manila; `occurred_at` is stored at
+midnight for that date in that timezone. Optional `description` or `remarks`
+may contain up to 4000 characters; when both are supplied they must match.
+Unknown fields are rejected.
+
+Returns HTTP 201 with `{success:true,transaction,entries,account_entries}` only
+after commit. The `DONATION` transaction and its single component have the same
+amount and resolved description. Its two postings use the selected debit and
+credit account IDs, with the debit positive and the credit negative. Invalid
+input or account type/cycle returns 400, unauthenticated requests 401,
+unauthorized roles 403, accounts outside the group 404, and a missing or
+non-writable current cycle 409. Ledger constraint and concurrency conflicts
+also return 409; a failed write rolls back the complete donation.
+
+The response includes the saved transaction, one component in `entries`, and
+both saved postings in `account_entries`:
+
+```json
+{
+  "success": true,
+  "transaction": {
+    "id": "201",
+    "group_id": "1",
+    "cycle_id": "20",
+    "user_id": null,
+    "type": "DONATION",
+    "amount": "1250.00",
+    "description": "Community donation",
+    "occurred_at": "2026-10-02T16:00:00.000Z",
+    "created_at": "2026-10-03T08:00:00.000Z",
+    "updated_at": "2026-10-03T08:00:00.000Z"
+  },
+  "entries": [{
+    "id": "202",
+    "group_id": "1",
+    "transaction_id": "201",
+    "user_id": null,
+    "cycle_id": "20",
+    "type": "DONATION",
+    "amount": "1250.00",
+    "description": "Community donation",
+    "created_at": "2026-10-03T08:00:00.000Z",
+    "updated_at": "2026-10-03T08:00:00.000Z"
+  }],
+  "account_entries": [
+    { "id": "203", "group_id": "1", "transaction_entry_id": "202", "account_id": "101", "amount": "1250.00", "description": null, "created_at": "2026-10-03T08:00:00.000Z", "updated_at": "2026-10-03T08:00:00.000Z" },
+    { "id": "204", "group_id": "1", "transaction_entry_id": "202", "account_id": "111", "amount": "-1250.00", "description": null, "created_at": "2026-10-03T08:00:00.000Z", "updated_at": "2026-10-03T08:00:00.000Z" }
+  ]
+}
+```
+
 `POST /api/v1/interests/charge` charges one full configured interest period on
 each eligible member loan in the current active or distributing cycle. Only an
 OWNER, ADMIN or TREASURER of the selected group may charge. Supply the debit

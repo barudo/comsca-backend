@@ -2,6 +2,7 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const knex = require("knex");
 const DashboardHandler = require("../src/handlers/dashboard");
+const DonationsHandler = require("../src/handlers/donations");
 const AccountingTrialBalanceHandler = require("../src/handlers/accounting-trial-balance");
 const AccountingBalanceSheetHandler = require("../src/handlers/accounting-balance-sheet");
 const AccountingIncomeStatementHandler = require("../src/handlers/accounting-income-statement");
@@ -438,6 +439,58 @@ test(
         toOnlyIncomeStatement.total_expenses,
         toOnlyIncomeStatement.net_income],
       ["7.50", "10.00", "-2.50"],
+    );
+
+    const [donationIncomeAccount] = await db("accounts")
+      .insert({
+        group_id: 1,
+        cycle_id: 20,
+        code: "4300",
+        name: "Donation Income",
+        type: "INCOME",
+      })
+      .returning("id");
+    const donationHandler = new DonationsHandler();
+    let donationStatus;
+    let donationBody;
+    await donationHandler.create(
+      {
+        app: { locals: { database: db } },
+        group: { id: "1" },
+        authUser: { id: "actor" },
+        body: {
+          debit: String(accountId(1, 20, "1000")),
+          credit: String(donationIncomeAccount.id),
+          amount: "42.75",
+          date: "2026-03-01",
+          description: "Integration donation",
+        },
+      },
+      {
+        status(value) {
+          donationStatus = value;
+          return this;
+        },
+        json(value) {
+          donationBody = value;
+          return value;
+        },
+      },
+      (error) => { throw error; },
+    );
+    assert.equal(donationStatus, 201);
+    assert.equal(donationBody.transaction.type, "DONATION");
+    assert.equal(donationBody.transaction.amount, "42.75");
+    assert.equal(new Date(donationBody.transaction.occurred_at).toISOString(), "2026-02-28T16:00:00.000Z");
+    assert.equal(donationBody.entries.length, 1);
+    assert.deepEqual(
+      donationBody.account_entries
+        .map(({ account_id, amount }) => [String(account_id), amount])
+        .sort(([left], [right]) => left.localeCompare(right)),
+      [
+        [String(accountId(1, 20, "1000")), "42.75"],
+        [String(donationIncomeAccount.id), "-42.75"],
+      ].sort(([left], [right]) => left.localeCompare(right)),
     );
 
     await db("cycles").where({ id: 20 }).update({ status: "closed" });

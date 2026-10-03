@@ -7,13 +7,15 @@ const { createApp } = require("../src/app");
 function fixture(t) {
   const db = knex({ client: "pg" });
   t.after(() => db.destroy());
-  const state = { role: "OWNER", cycle: true, member: true, membership: true, error: null,
+  const state = { role: "OWNER", cycle: true, cycleStatus: "active", member: true, membership: true, error: null,
     accounts: [{ id: "101", cycle_id: "20", type: "ASSET", code: "1000" },
       { id: "102", cycle_id: "20", type: "ASSET", code: "1100" },
       { id: "106", cycle_id: "20", type: "EQUITY", code: "3000" },
       { id: "107", cycle_id: "20", type: "ASSET", code: "1300" },
       { id: "108", cycle_id: "20", type: "INCOME", code: "4100" },
-      { id: "109", cycle_id: "20", type: "ASSET", code: "1400" }],
+      { id: "109", cycle_id: "20", type: "ASSET", code: "1400" },
+      { id: "110", cycle_id: "20", type: "ASSET", code: "1000" },
+      { id: "111", cycle_id: "20", type: "INCOME", code: "4300" }],
     writes: [], queries: [] };
   let header;
   Object.defineProperty(db, "transaction", { value: async fn => {
@@ -35,7 +37,14 @@ function fixture(t) {
       assert.equal(q.bindings[0], "1");
       return state.accounts.filter(account => q.bindings.slice(1).includes(account.id));
     }
-    if (q.sql.includes('from "cycles"')) { assert.equal(q.bindings[1], "1"); return state.cycle ? { id: q.bindings[0] } : undefined; }
+    if (q.sql.includes('from "cycles"')) {
+      if (q.sql.includes('"status" in')) {
+        assert.deepEqual(q.bindings.slice(0, 3), ["1", "active", "distributing"]);
+        return state.cycle && ["active", "distributing"].includes(state.cycleStatus) ? { id: "20" } : undefined;
+      }
+      assert.equal(q.bindings[1], "1");
+      return state.cycle ? { id: q.bindings[0] } : undefined;
+    }
     if (q.sql.includes('from "cycle_members"')) { assert.deepEqual(q.bindings, ["11", "20", 1]); return state.membership ? { user_id: "11" } : undefined; }
     if (q.method === "insert") {
       const rows = [builder._single.insert].flat().map((row, i) => ({ id: String(200 + state.writes.length + i), ...row }));
@@ -226,4 +235,94 @@ test("the replaced equity POST route returns 404", async t => {
   const { state, post } = fixture(t);
   assert.equal((await post(input, {}, undefined, "/api/v1/transactions/equity")).status, 404);
   assert.equal(state.writes.length, 0);
+});
+
+test("donations POST records a balanced donation with Manila calendar midnight", async t => {
+  const { state, post } = fixture(t);
+  const result = await post({
+    debit: "110",
+    credit: "111",
+    amount: "1250.05",
+    date: "2026-10-03",
+    remarks: "Community donation",
+  }, {}, undefined, "/api/v1/transactions/donations");
+
+  assert.equal(result.status, 201);
+  assert.equal(result.body.transaction.type, "DONATION");
+  assert.equal(result.body.transaction.amount, "1250.05");
+  assert.equal(result.body.transaction.cycle_id, "20");
+  assert.equal(result.body.transaction.user_id, null);
+  assert.equal(result.body.transaction.description, "Community donation");
+  assert.equal(result.body.transaction.occurred_at, "2026-10-03T00:00:00+08:00");
+  assert.equal(result.body.entries.length, 1);
+  assert.equal(result.body.entries[0].amount, "1250.05");
+  assert.equal(result.body.entries[0].description, "Community donation");
+  assert.deepEqual(result.body.account_entries.map(({ account_id, amount }) => [account_id, amount]), [
+    ["110", "1250.05"], ["111", "-1250.05"],
+  ]);
+  assert.match(state.queries.find(query => query.sql.includes('from "cycles"')).sql, /for update/);
+});
+
+test("donations POST validates aliases, amounts, dates, IDs and account rules before writing", async t => {
+  const { state, post } = fixture(t);
+  const path = "/api/v1/transactions/donations";
+  const donation = { debit: "110", credit: "111", amount: "10.00", date: "2026-10-03" };
+  for (const changes of [
+    { amount: 0 }, { amount: "0.00" }, { amount: "-1.00" }, { amount: "1.001" },
+    { amount: "10000000000000000.00" }, { date: "2026-02-30" }, { date: "2026-1-03" },
+    { debit: "bad" }, { credit: "9223372036854775808" },
+    { description: "one", remarks: "two" }, { extra: true },
+  ]) {
+    assert.equal((await post({ ...donation, ...changes }, {}, undefined, path)).status, 400);
+  }
+  assert.equal((await post({ ...donation, description: "same", remarks: "same" }, {}, undefined, path)).status, 201);
+  assert.equal(state.writes.length, 3);
+
+  state.writes.length = 0;
+  for (const changes of [
+    { debit: "111" }, { credit: "110" }, { credit: "108" }, { debit: "999" },
+  ]) {
+    assert.ok([400, 404].includes((await post({ ...donation, ...changes }, {}, undefined, path)).status));
+  }
+  state.accounts.push({ id: "112", cycle_id: "99", type: "ASSET", code: "1000" });
+  assert.equal((await post({ ...donation, debit: "112" }, {}, undefined, path)).status, 400);
+  assert.equal(state.writes.length, 0);
+});
+
+test("donations POST requires a writable cycle and an authorized financial writer", async t => {
+  const { state, post } = fixture(t);
+  const path = "/api/v1/transactions/donations";
+  const donation = { debit: "110", credit: "111", amount: "10.00", date: "2026-10-03" };
+  for (const role of ["OWNER", "ADMIN", "TREASURER"]) {
+    state.role = role;
+    state.cycleStatus = role === "TREASURER" ? "distributing" : "active";
+    assert.equal((await post(donation, {}, undefined, path)).status, 201);
+  }
+  state.writes.length = 0;
+  for (const role of ["MEMBER", "AUDITOR", null, "owner"]) {
+    state.role = role;
+    assert.equal((await post(donation, {}, undefined, path)).status, 403);
+  }
+  state.role = "OWNER";
+  for (const status of ["draft", "closed"]) {
+    state.cycleStatus = status;
+    assert.equal((await post(donation, {}, undefined, path)).status, 409);
+  }
+  state.cycle = false;
+  assert.equal((await post(donation, {}, undefined, path)).status, 409);
+  assert.equal((await post(donation, { authorization: "" }, undefined, path)).status, 401);
+  assert.equal(state.writes.length, 0);
+});
+
+test("donations POST rolls back and maps ledger persistence conflicts", async t => {
+  const { state, post } = fixture(t);
+  const path = "/api/v1/transactions/donations";
+  const donation = { debit: "110", credit: "111", amount: "10.00", date: "2026-10-03" };
+  for (const code of ["23503", "23514", "40001", "40P01"]) {
+    state.error = Object.assign(new Error("private error"), { code });
+    const result = await post(donation, {}, undefined, path);
+    assert.equal(result.status, 409);
+    assert.equal(state.writes.length, 0);
+    assert.doesNotMatch(result.body.error, /private/);
+  }
 });
