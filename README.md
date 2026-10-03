@@ -443,6 +443,19 @@ Errors: 400 invalid input/types/membership; 401 unauthenticated; 403 unauthorize
 writer; 404 reference not found in the selected group; 409 database constraint
 or concurrent-write conflict. No new migration is required for this endpoint.
 
+`POST /api/v1/loan-apply` creates a loan application. Supply a Bearer token and
+`x-group-slug`. MEMBER sends `{ "amount_desired": 2000 }`; OWNER, ADMIN and
+TREASURER send `{ "user_id": "11", "amount_desired": 2000 }`. Members cannot
+supply another user ID. The applicant must belong to the selected group and
+its latest current cycle (draft, active or distributing). Amount must be positive
+with at most two decimal places; use strings for large exact amounts.
+
+The backend sets `cycle_id`, `status: "active"`, `amount_disbursed: "0.00"`,
+and server `created_at`/`updated_at` timestamps, without Manila conversion.
+Other input fields are rejected. Returns 201 with
+`{ "success": true, "loan_application": { ... } }`. No disbursement or ledger
+posting occurs. Apply migration `029_create_loan_applications.js` before use.
+
 `POST /api/v1/transactions/add-expense` records an incurred, unpaid expense in
 the current active or distributing cycle. Supply a Bearer token and
 `x-group-slug`; only an OWNER, ADMIN or TREASURER in that group can post.

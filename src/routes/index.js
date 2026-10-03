@@ -17,6 +17,7 @@ const LoanDisbursementsHandler = require("../handlers/loan-disbursements");
 const PaymentTransactionsHandler = require("../handlers/payment-transactions");
 const DonationsHandler = require("../handlers/donations");
 const ExpensesHandler = require("../handlers/expenses");
+const LoanApplicationsHandler = require("../handlers/loan-applications");
 const GroupUsersHandler = require("../handlers/group-users");
 const GroupUserListHandler = require("../handlers/group-user-list");
 const GroupUserAccountsHandler = require("../handlers/group-user-accounts");
@@ -45,6 +46,7 @@ function createRouter(database) {
   const paymentTransactions = new PaymentTransactionsHandler();
   const donations = new DonationsHandler();
   const expenses = new ExpensesHandler();
+  const loanApplications = new LoanApplicationsHandler();
   const groupUsers = new GroupUsersHandler();
   const groupUserList = new GroupUserListHandler();
   const groupUserAccounts = new GroupUserAccountsHandler();
@@ -206,6 +208,7 @@ function createRouter(database) {
     authenticate,
     expenses.create.bind(expenses),
   );
+  router.post("/api/v1/loan-apply", authenticate, loanApplications.create.bind(loanApplications));
   router.post("/api/v1/cycles", authenticate, cycles.create.bind(cycles));
   router.put("/api/v1/cycles/:id", authenticate, cycles.update.bind(cycles));
   router.patch("/api/v1/cycles/:id", authenticate, cycles.update.bind(cycles));
