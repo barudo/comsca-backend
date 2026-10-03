@@ -15,7 +15,9 @@ function fixture(t) {
       { id: "108", cycle_id: "20", type: "INCOME", code: "4100" },
       { id: "109", cycle_id: "20", type: "ASSET", code: "1400" },
       { id: "110", cycle_id: "20", type: "ASSET", code: "1000" },
-      { id: "111", cycle_id: "20", type: "INCOME", code: "4300" }],
+      { id: "111", cycle_id: "20", type: "INCOME", code: "4300" },
+      { id: "120", cycle_id: "20", type: "EXPENSE", code: "5000" },
+      { id: "121", cycle_id: "20", type: "LIABILITY", code: "2000" }],
     writes: [], queries: [] };
   let header;
   Object.defineProperty(db, "transaction", { value: async fn => {
@@ -35,7 +37,7 @@ function fixture(t) {
     if (q.sql.includes('from "accounts"')) {
       assert.match(q.sql, /"group_id" = \?.*for share/);
       assert.equal(q.bindings[0], "1");
-      return state.accounts.filter(account => q.bindings.slice(1).includes(account.id));
+      return state.accounts.filter(account => (account.group_id ?? "1") === q.bindings[0] && q.bindings.slice(1).includes(account.id));
     }
     if (q.sql.includes('from "cycles"')) {
       if (q.sql.includes('"status" in')) {
@@ -47,6 +49,7 @@ function fixture(t) {
     }
     if (q.sql.includes('from "cycle_members"')) { assert.deepEqual(q.bindings, ["11", "20", 1]); return state.membership ? { user_id: "11" } : undefined; }
     if (q.method === "insert") {
+      if (state.failTable === builder._single.table) throw state.writeError;
       const rows = [builder._single.insert].flat().map((row, i) => ({ id: String(200 + state.writes.length + i), ...row }));
       state.writes.push({ table: builder._single.table, rows });
       if (builder._single.table === "transactions") header = { occurred_at: "2026-10-03T08:12:34.567Z", ...rows[0] };
@@ -338,5 +341,120 @@ test("donations POST ignores legacy dates and leaves timestamp assignment to the
   }
   for (const write of state.writes.filter(write => write.table === "transactions")) {
     assert.ok(!Object.hasOwn(write.rows[0], "occurred_at"));
+  }
+});
+
+
+const expensePath = "/api/v1/transactions/add-expense";
+const expense = { debit: "120", credit: "121", amount: 2000, description: "Monthly system subscription" };
+
+test("add-expense creates an unpaid expense with equal expense/payable postings and server time", async t => {
+  const { state, post } = fixture(t);
+  const result = await post(expense, {}, undefined, expensePath);
+  assert.equal(result.status, 201);
+  assert.equal(result.body.transaction.type, "EXPENSE");
+  assert.equal(result.body.transaction.amount, "2000.00");
+  assert.equal(result.body.transaction.description, expense.description);
+  assert.equal(result.body.transaction.group_id, "1");
+  assert.equal(result.body.transaction.cycle_id, "20");
+  assert.equal(result.body.transaction.user_id, null);
+  assert.equal(result.body.transaction.occurred_at, "2026-10-03T08:12:34.567Z");
+  assert.equal(result.body.entries.length, 1);
+  const entry = result.body.entries[0];
+  assert.equal(entry.type, "EXPENSE");
+  assert.equal(entry.amount, "2000.00");
+  assert.equal(entry.description, expense.description);
+  assert.equal(entry.transaction_id, result.body.transaction.id);
+  assert.equal(entry.group_id, "1");
+  assert.equal(entry.cycle_id, "20");
+  assert.equal(entry.user_id, null);
+  assert.deepEqual(result.body.account_entries.map(p => [p.account_id, p.amount]), [["120", "2000.00"], ["121", "-2000.00"]]);
+  assert.ok(result.body.account_entries.every(p => p.transaction_entry_id === entry.id && p.group_id === "1"));
+  assert.deepEqual(state.writes.map(w => w.table), ["transactions", "transaction_entries", "account_entries"]);
+  assert.ok(!Object.hasOwn(state.writes[0].rows[0], "occurred_at"));
+  assert.match(state.queries.find(q => q.sql.includes('from "cycles"')).sql, /order by "created_at" desc, "id" desc.*for update/);
+  assert.equal((await post({ ...expense, amount: "9999999999999999.99" }, {}, undefined, expensePath)).body.transaction.amount, "9999999999999999.99");
+});
+
+test("add-expense validates money, required description, IDs and unsupported fields before writes", async t => {
+  const { state, post } = fixture(t);
+  for (const amount of [undefined, null, 0, -1, "0.00", "1.001", "NaN", "Infinity", "1e3", true, {}, "10000000000000000.00", 1000000000001]) {
+    assert.equal((await post({ ...expense, amount }, {}, undefined, expensePath)).status, 400);
+  }
+  for (const description of [undefined, null, "", "  ", "\n\t", 42, {}, "bad\0text", "x".repeat(4001)]) {
+    assert.equal((await post({ ...expense, description }, {}, undefined, expensePath)).status, 400);
+  }
+  for (const changes of [{ debit: "bad" }, { credit: "9223372036854775808" }, { debit: "121" }, { credit: 1.5 }, { date: "2026-10-03" }, { user_id: "11" }, { cycle_id: "20" }, { remarks: "alias" }]) {
+    assert.equal((await post({ ...expense, ...changes }, {}, undefined, expensePath)).status, 400);
+  }
+  assert.equal(state.writes.length, 0);
+});
+
+test("add-expense rejects wrong types, foreign groups and foreign or unscoped cycles", async t => {
+  const { state, post } = fixture(t);
+  for (const side of ["debit", "credit"]) {
+    for (const type of ["ASSET", "INCOME", "EQUITY", side === "debit" ? "LIABILITY" : "EXPENSE"]) {
+      state.accounts.push({ id: "130", cycle_id: "20", type, code: "9999" });
+      assert.equal((await post({ ...expense, [side]: "130" }, {}, undefined, expensePath)).status, 400);
+      state.accounts.pop();
+    }
+    for (const cycle_id of ["99", null]) {
+      state.accounts.push({ id: "130", cycle_id, type: side === "debit" ? "EXPENSE" : "LIABILITY" });
+      assert.equal((await post({ ...expense, [side]: "130" }, {}, undefined, expensePath)).status, 400);
+      state.accounts.pop();
+    }
+    state.accounts.push({ id: "130", group_id: "2", cycle_id: "20", type: side === "debit" ? "EXPENSE" : "LIABILITY" });
+    assert.equal((await post({ ...expense, [side]: "130" }, {}, undefined, expensePath)).status, 404);
+    assert.equal((await post({ ...expense, [side]: "999" }, {}, undefined, expensePath)).status, 404);
+    state.accounts.pop();
+  }
+  assert.equal(state.writes.length, 0);
+  state.accounts.push({ id: "130", cycle_id: "20", type: "LIABILITY", code: "2100" });
+  assert.equal((await post({ ...expense, credit: "130" }, {}, undefined, expensePath)).status, 201);
+});
+
+test("add-expense requires authenticated scoped writers and a writable cycle", async t => {
+  const { state, post } = fixture(t);
+  for (const role of ["OWNER", "ADMIN", "TREASURER"]) {
+    state.role = role;
+    for (const cycleStatus of ["active", "distributing"]) {
+      state.cycleStatus = cycleStatus;
+      assert.equal((await post(expense, {}, undefined, expensePath)).status, 201);
+    }
+  }
+  state.writes.length = 0;
+  for (const role of ["MEMBER", "SECRETARY", "AUDITOR"]) {
+    state.role = role;
+    assert.equal((await post(expense, {}, undefined, expensePath)).status, 403);
+  }
+  state.role = "OWNER";
+  assert.equal((await post(expense, { authorization: "" }, undefined, expensePath)).status, 401);
+  assert.equal((await post(expense, { "x-group-slug": "beta" }, undefined, expensePath)).status, 403);
+  for (const cycleStatus of ["draft", "closed"]) {
+    state.cycleStatus = cycleStatus;
+    assert.equal((await post(expense, {}, undefined, expensePath)).status, 409);
+  }
+  state.cycle = false;
+  assert.equal((await post(expense, {}, undefined, expensePath)).status, 409);
+  assert.equal(state.writes.length, 0);
+});
+
+test("add-expense rolls back failures at every write and at commit, sanitizing errors", async t => {
+  const { state, post } = fixture(t);
+  for (const table of ["transactions", "transaction_entries", "account_entries"]) {
+    state.failTable = table;
+    state.writeError = Object.assign(new Error("private details"), { code: "23514" });
+    const result = await post(expense, {}, undefined, expensePath);
+    assert.equal(result.status, 409);
+    assert.doesNotMatch(result.body.error, /private/);
+    assert.equal(state.writes.length, 0);
+  }
+  state.failTable = null;
+  for (const code of ["23001", "23503", "23505", "23514", "40001", "40P01", "unexpected"]) {
+    state.error = Object.assign(new Error("private details"), { code });
+    const result = await post(expense, {}, undefined, expensePath);
+    assert.equal(result.status, code === "unexpected" ? 500 : 409);
+    assert.doesNotMatch(result.body.error, /private/);
+    assert.equal(state.writes.length, 0);
   }
 });

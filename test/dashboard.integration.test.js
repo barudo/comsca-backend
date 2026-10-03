@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const knex = require("knex");
 const DashboardHandler = require("../src/handlers/dashboard");
 const DonationsHandler = require("../src/handlers/donations");
+const ExpensesHandler = require("../src/handlers/expenses");
 const AccountingTrialBalanceHandler = require("../src/handlers/accounting-trial-balance");
 const AccountingBalanceSheetHandler = require("../src/handlers/accounting-balance-sheet");
 const AccountingIncomeStatementHandler = require("../src/handlers/accounting-income-statement");
@@ -499,6 +500,50 @@ test(
         [String(donationIncomeAccount.id), "-42.75"],
       ].sort(([left], [right]) => left.localeCompare(right)),
     );
+
+    const expenseHandler = new ExpensesHandler();
+    const expenseRequest = {
+      app: { locals: { database: db } },
+      group: { id: "1" },
+      authUser: { id: "actor" },
+      body: {
+        debit: String(accountId(1, 20, "5000")),
+        credit: String(accountId(1, 20, "2000")),
+        amount: 2000,
+        description: "Monthly system subscription",
+      },
+    };
+    const postExpense = async () => {
+      let status, body;
+      await expenseHandler.create(expenseRequest, {
+        status(value) { status = value; return this; },
+        json(value) { body = value; return value; },
+      }, error => { throw error; });
+      return { status, body };
+    };
+    const cashBefore = await db("account_entries").where({ account_id: accountId(1, 20, "1000") }).sum("amount AS balance").first();
+    const expenseResult = await postExpense();
+    assert.equal(expenseResult.status, 201);
+    assert.equal(expenseResult.body.transaction.type, "EXPENSE");
+    assert.equal(expenseResult.body.transaction.amount, "2000.00");
+    assert.equal(expenseResult.body.entries.length, 1);
+    const savedPostings = await db("account_entries").where({ transaction_entry_id: expenseResult.body.entries[0].id }).orderBy("amount", "desc");
+    assert.deepEqual(savedPostings.map(p => [String(p.account_id), p.amount]), [
+      [expenseRequest.body.debit, "2000.00"], [expenseRequest.body.credit, "-2000.00"],
+    ]);
+    assert.deepEqual(await db("account_entries").where({ account_id: accountId(1, 20, "1000") }).sum("amount AS balance").first(), cashBefore);
+
+    // Force a real posting failure after the header and component were inserted.
+    const counts = async () => Promise.all(["transactions", "transaction_entries", "account_entries"].map(table => db(table).count("* AS count").first()));
+    const beforeFailure = await counts();
+    await db.raw(`CREATE FUNCTION public.reject_test_expense_posting() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION 'Injected posting failure' USING ERRCODE='23514'; END; $$;
+      CREATE TRIGGER reject_test_expense_posting BEFORE INSERT ON public.account_entries
+      FOR EACH ROW EXECUTE FUNCTION public.reject_test_expense_posting();`);
+    assert.equal((await postExpense()).status, 409);
+    assert.deepEqual(await counts(), beforeFailure);
+    await db.raw(`DROP TRIGGER reject_test_expense_posting ON public.account_entries;
+      DROP FUNCTION public.reject_test_expense_posting();`);
 
     await db("cycles").where({ id: 20 }).update({ status: "closed" });
     await db("cycles").insert({

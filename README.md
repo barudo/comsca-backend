@@ -443,6 +443,44 @@ Errors: 400 invalid input/types/membership; 401 unauthenticated; 403 unauthorize
 writer; 404 reference not found in the selected group; 409 database constraint
 or concurrent-write conflict. No new migration is required for this endpoint.
 
+`POST /api/v1/transactions/add-expense` records an incurred, unpaid expense in
+the current active or distributing cycle. Supply a Bearer token and
+`x-group-slug`; only an OWNER, ADMIN or TREASURER in that group can post.
+
+```json
+{
+  "amount": 2000,
+  "description": "Monthly system subscription",
+  "debit": "120",
+  "credit": "121"
+}
+```
+
+Use account IDs from `GET /api/v1/cycles/accounts`. Both accounts must belong to
+the selected group and current writable cycle. The debit must be EXPENSE; the
+credit must be LIABILITY, normally Accounts Payable (2000). Other liability
+accounts are allowed. The IDs must differ. Amount must be positive, have at most
+two decimal places, and fit `numeric(18,2)`; use decimal strings for large or
+exact values. Description must be nonblank text of at most 4000 characters with
+no null characters. Other request fields are rejected.
+
+The database supplies the current server date and time without Manila conversion.
+One `EXPENSE` transaction and one `EXPENSE` business component are created,
+followed by two account entries: positive expense debit and equal negative
+liability credit. In this ledger, debit/credit sides are `account_entries`, not
+separate business components. Cash is unchanged; payment is a later operation.
+All writes commit atomically. A failure rolls back the entire expense.
+
+Returns HTTP 201 with `{success:true,transaction,entries,account_entries}`.
+`transaction` is the saved header; `entries` contains its business component;
+`account_entries` contains both saved postings referencing that component.
+For the example, header/component amounts are `"2000.00"`, and posting amounts
+are `"2000.00"` and `"-2000.00"`. Errors follow the other transaction endpoints:
+400 invalid input/account type/cycle, 401 unauthenticated, 403 unauthorized,
+404 account not found in the group, and 409 no writable cycle or ledger conflict.
+Each successful POST creates a new expense; automatic retry deduplication is
+not provided. No migration is required.
+
 `POST /api/v1/transactions/donations` records a group donation in the current
 active or distributing cycle. Supply a Bearer token and `x-group-slug`; only an
 OWNER, ADMIN or TREASURER of that group can post.
