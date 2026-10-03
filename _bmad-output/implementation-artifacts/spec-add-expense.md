@@ -2,7 +2,7 @@
 title: 'Record incurred unpaid expenses'
 type: 'feature'
 created: '2026-10-03'
-status: 'in-progress'
+status: 'done'
 route: 'oneshot'
 review_loop_iteration: 0
 context: []
@@ -22,3 +22,15 @@ Create an EXPENSE header, one EXPENSE business component, and its equal positive
 
 - No unresolved intent gaps or irreversible changes; no schema migration. Extract the existing donation handler's scoped validation and posting pipeline for reuse by donation and expense handlers, retaining donation behavior.
 - Register the authenticated route, document the contract, and cover success, validation, scopes, roles, cycles, rollback, and unchanged cash in route/integration tests.
+
+- Implemented shared group posting handler, expense policy, route, docs, and targeted coverage. 21 route tests passed before the user requested no further tests. PostgreSQL integration coverage was added but skipped without TEST_DATABASE_URL.
+
+## Review Triage Log
+
+Independent review found no functional posting defect. The following low-priority verification expansions were rejected for this change: existing coverage plus the user's subsequent minimal/no-more-tests instruction do not justify expanding the fixture further.
+- Low: add report-total assertions after expense; persisted account postings already checked, report code unchanged.
+- Low: add real deferred-commit failure trigger; commit error mapping covered by route fixture and actual write rollback covered by integration fixture.
+- Low: add expense database timestamp bounds; shared database defaults and donation integration bounds already covered.
+- Low: add concurrent cycle-close test; shared locked selection inspected, additional multiconnection fixture exceeds minimal scope.
+- Low: add PostgreSQL fractional/extreme-amount cases; exact-decimal route coverage and numeric schema constraints retained.
+- Low: add malformed expense body cases; existing common parser and validator unchanged, further tests explicitly declined.
