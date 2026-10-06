@@ -71,6 +71,11 @@ test("charge creates a group header and balanced member entries for every financ
     state.role = role;
     const result = await post({ ...input, description: "September contributions" });
     assert.equal(result.status, 201);
+    for (const entry of result.body.entries) {
+      const postings = result.body.account_entries.filter(posting => posting.transaction_entry_id === entry.id);
+      assert.equal(entry.debit, postings.find(posting => Number(posting.amount) > 0).account_id);
+      assert.equal(entry.credit, postings.find(posting => Number(posting.amount) < 0).account_id);
+    }
     assert.equal(result.body.success, true);
     assert.equal(result.headers["cache-control"], "no-store");
     assert.equal(result.body.transaction.amount, "76.50");
@@ -170,6 +175,11 @@ test("charge batches 1001 unique members and rolls back a later posting failure"
   state.members = Array.from({ length: 1001 }, (_, i) => ({ user_id: String(i + 100) }));
   const result = await post(input);
   assert.equal(result.status, 201);
+    for (const entry of result.body.entries) {
+      const postings = result.body.account_entries.filter(posting => posting.transaction_entry_id === entry.id);
+      assert.equal(entry.debit, postings.find(posting => Number(posting.amount) > 0).account_id);
+      assert.equal(entry.credit, postings.find(posting => Number(posting.amount) < 0).account_id);
+    }
   assert.equal(result.body.transaction.amount, "25525.50");
   assert.deepEqual(result.body.entries.map(entry => entry.user_id), state.members.map(member => member.user_id));
   assert.equal(new Set(result.body.entries.map(entry => entry.id)).size, 1001);

@@ -163,7 +163,7 @@ class PenaltiesHandler {
               .insert(
                 members.slice(offset, offset + 1000).map((member) => ({
                   group_id,
-                  transaction_id: header.id,
+                  transaction_id: header.id, debit: input.debit, credit: input.credit,
                   cycle_id: cycle.id,
                   user_id: member.user_id,
                   type: "CHARGE_PENALTY",

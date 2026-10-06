@@ -114,7 +114,7 @@ class PaymentTransactionsHandler {
         const account_entries = [];
         for (const entry of input.entries) {
           // Insert each component explicitly so postings never depend on bulk RETURNING order.
-          const [component] = await trx("transaction_entries").insert({ group_id, transaction_id: header.id,
+          const [component] = await trx("transaction_entries").insert({ group_id, transaction_id: header.id, debit: entry.debit, credit: entry.credit,
             user_id: input.user_id, cycle_id, type: entry.type, amount: entry.amount, description: entry.description }).returning("*");
           entries.push(component);
           account_entries.push(...await trx("account_entries").insert([

@@ -84,7 +84,7 @@ class ContributionsHandler {
         // Bound each statement's parameter count for large cycle rosters.
         for (let offset = 0; offset < members.length; offset += 1000) {
           const batch = await trx("transaction_entries").insert(members.slice(offset, offset + 1000).map(member => ({
-            group_id, transaction_id: header.id, cycle_id: cycle.id, user_id: member.user_id,
+            group_id, transaction_id: header.id, debit: input.debit, credit: input.credit, cycle_id: cycle.id, user_id: member.user_id,
             type: "CHARGE_CONTRIBUTION", amount: input.amount, description: input.description,
           }))).returning("*");
           entries.push(...batch);

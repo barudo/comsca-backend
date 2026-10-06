@@ -163,6 +163,11 @@ test("interest charge reconstructs loans chronologically and applies payments to
   ];
   const result = await post();
   assert.equal(result.status, 201);
+    for (const entry of result.body.entries) {
+      const postings = result.body.account_entries.filter(posting => posting.transaction_entry_id === entry.id);
+      assert.equal(entry.debit, postings.find(posting => Number(posting.amount) > 0).account_id);
+      assert.equal(entry.credit, postings.find(posting => Number(posting.amount) < 0).account_id);
+    }
   assert.equal(result.body.transaction.type, "LOAN_INTEREST");
   assert.equal(result.body.transaction.amount, "24.50");
   assert.equal(result.body.entries.length, 1);
@@ -190,6 +195,11 @@ test("interest charge uses compound unpaid interest and PostgreSQL cent rounding
   state.events = [event("11", "LOAN_DISBURSED", "1.00", 1)];
   const result = await post();
   assert.equal(result.status, 201);
+    for (const entry of result.body.entries) {
+      const postings = result.body.account_entries.filter(posting => posting.transaction_entry_id === entry.id);
+      assert.equal(entry.debit, postings.find(posting => Number(posting.amount) > 0).account_id);
+      assert.equal(entry.credit, postings.find(posting => Number(posting.amount) < 0).account_id);
+    }
   assert.equal(result.body.transaction.amount, "0.03");
   state.writes.length = 0;
   state.events = [

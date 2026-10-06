@@ -230,7 +230,7 @@ class InterestsHandler {
               .insert(
                 entriesToPost.slice(offset, offset + 500).map((entry) => ({
                   group_id,
-                  transaction_id: header.id,
+                  transaction_id: header.id, debit: input.debit, credit: input.credit,
                   cycle_id: cycle.id,
                   user_id: entry.user_id,
                   type: "LOAN_INTEREST",

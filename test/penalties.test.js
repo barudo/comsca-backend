@@ -133,6 +133,11 @@ test("penalty charge creates a PENALTY header and balanced CHARGE_PENALTY member
     state.role = role;
     const result = await post({ ...input, description: "Absence penalty" });
     assert.equal(result.status, 201);
+    for (const entry of result.body.entries) {
+      const postings = result.body.account_entries.filter(posting => posting.transaction_entry_id === entry.id);
+      assert.equal(entry.debit, postings.find(posting => Number(posting.amount) > 0).account_id);
+      assert.equal(entry.credit, postings.find(posting => Number(posting.amount) < 0).account_id);
+    }
     assert.equal(result.headers["cache-control"], "no-store");
     assert.equal(result.body.success, true);
     assert.equal(result.body.transaction.type, "PENALTY");

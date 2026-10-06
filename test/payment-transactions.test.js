@@ -94,6 +94,11 @@ test("payments POST creates a member PAYMENT and balanced component postings for
       { type: "PAY_CONTRIBUTION", debit: "101", credit: "109", amount: "25.50" },
     ] });
     assert.equal(result.status, 201);
+    for (const entry of result.body.entries) {
+      const postings = result.body.account_entries.filter(posting => posting.transaction_entry_id === entry.id);
+      assert.equal(entry.debit, postings.find(posting => Number(posting.amount) > 0).account_id);
+      assert.equal(entry.credit, postings.find(posting => Number(posting.amount) < 0).account_id);
+    }
     assert.equal(result.headers["cache-control"], "no-store");
     assert.equal(result.body.transaction.type, "PAYMENT");
     assert.equal(result.body.transaction.amount, "1025.81");
@@ -143,6 +148,11 @@ test("payments POST sums large components without losing cents", async t => {
   const { post } = fixture(t);
   const result = await post({ ...input, entries: [{ ...share, amount: "9999999999999999.98" }, { ...share, amount: "0.01" }] });
   assert.equal(result.status, 201);
+    for (const entry of result.body.entries) {
+      const postings = result.body.account_entries.filter(posting => posting.transaction_entry_id === entry.id);
+      assert.equal(entry.debit, postings.find(posting => Number(posting.amount) > 0).account_id);
+      assert.equal(entry.credit, postings.find(posting => Number(posting.amount) < 0).account_id);
+    }
   assert.equal(result.body.transaction.amount, "9999999999999999.99");
 });
 
@@ -262,6 +272,11 @@ test("donations POST records a balanced donation without a frontend date", async
   }, {}, undefined, "/api/v1/transactions/donations");
 
   assert.equal(result.status, 201);
+    for (const entry of result.body.entries) {
+      const postings = result.body.account_entries.filter(posting => posting.transaction_entry_id === entry.id);
+      assert.equal(entry.debit, postings.find(posting => Number(posting.amount) > 0).account_id);
+      assert.equal(entry.credit, postings.find(posting => Number(posting.amount) < 0).account_id);
+    }
   assert.equal(result.body.transaction.type, "DONATION");
   assert.equal(result.body.transaction.amount, "1250.05");
   assert.equal(result.body.transaction.cycle_id, "20");
@@ -349,6 +364,11 @@ test("donations POST ignores legacy dates and leaves timestamp assignment to the
   for (const date of ["2000-01-01", "2099-12-31", "2026-02-30", "", null]) {
     const result = await post({ debit: "110", credit: "111", amount: "10.00", date }, {}, undefined, "/api/v1/transactions/donations");
     assert.equal(result.status, 201);
+    for (const entry of result.body.entries) {
+      const postings = result.body.account_entries.filter(posting => posting.transaction_entry_id === entry.id);
+      assert.equal(entry.debit, postings.find(posting => Number(posting.amount) > 0).account_id);
+      assert.equal(entry.credit, postings.find(posting => Number(posting.amount) < 0).account_id);
+    }
     assert.equal(result.body.transaction.occurred_at, "2026-10-03T08:12:34.567Z");
   }
   for (const write of state.writes.filter(write => write.table === "transactions")) {
@@ -364,6 +384,11 @@ test("add-expense creates an unpaid expense with equal expense/payable postings 
   const { state, post } = fixture(t);
   const result = await post(expense, {}, undefined, expensePath);
   assert.equal(result.status, 201);
+    for (const entry of result.body.entries) {
+      const postings = result.body.account_entries.filter(posting => posting.transaction_entry_id === entry.id);
+      assert.equal(entry.debit, postings.find(posting => Number(posting.amount) > 0).account_id);
+      assert.equal(entry.credit, postings.find(posting => Number(posting.amount) < 0).account_id);
+    }
   assert.equal(result.body.transaction.type, "EXPENSE");
   assert.equal(result.body.transaction.amount, "2000.00");
   assert.equal(result.body.transaction.description, expense.description);
@@ -476,6 +501,11 @@ test("payments allocate one receipt per header with bigint precision and rollbac
   state.receiptCounter = "9007199254740992";
   const result = await post({ ...input, entries: [share, share] });
   assert.equal(result.status, 201);
+    for (const entry of result.body.entries) {
+      const postings = result.body.account_entries.filter(posting => posting.transaction_entry_id === entry.id);
+      assert.equal(entry.debit, postings.find(posting => Number(posting.amount) > 0).account_id);
+      assert.equal(entry.credit, postings.find(posting => Number(posting.amount) < 0).account_id);
+    }
   assert.equal(result.body.transaction.document_type, "PAYMENT_RECEIPT");
   assert.equal(result.body.transaction.document_number, "9007199254740993");
   assert.equal(state.receiptCounter, "9007199254740993");

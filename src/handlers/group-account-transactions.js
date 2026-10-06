@@ -169,7 +169,7 @@ class GroupAccountTransactionsHandler {
           const [component] = await trx("transaction_entries")
             .insert({
               group_id,
-              transaction_id: header.id,
+              transaction_id: header.id, debit: input.debit, credit: input.credit,
               user_id: null,
               cycle_id: cycle.id,
               type: this.rules.type,
