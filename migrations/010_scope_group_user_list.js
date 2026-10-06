@@ -1,7 +1,25 @@
 const userColumns = "id, group_id, first_name, family_name, username, email, phone, address, role, created_at, updated_at";
 
 exports.up = async function up(knex) {
-  await knex.raw("CREATE ROLE comsca_group_reader NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS");
+  // Roles belong to the cluster and can survive a database/schema rebuild.
+  await knex.raw(`
+    DO $$
+    BEGIN
+      BEGIN
+        CREATE ROLE comsca_group_reader NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+      EXCEPTION WHEN duplicate_object THEN
+        NULL;
+      END;
+      IF EXISTS (
+        SELECT 1 FROM pg_catalog.pg_roles
+        WHERE rolname = 'comsca_group_reader'
+          AND (rolcanlogin OR rolsuper OR rolcreatedb OR rolcreaterole OR rolinherit OR rolbypassrls)
+      ) THEN
+        RAISE EXCEPTION 'Existing role comsca_group_reader has unexpected privileges; reconcile its attributes before retrying';
+      END IF;
+    END
+    $$;
+  `);
   const { rows } = await knex.raw("SELECT current_user AS name");
   await knex.raw("GRANT comsca_group_reader TO ??", [rows[0].name]);
   await knex.raw("GRANT USAGE ON SCHEMA public TO comsca_group_reader");
