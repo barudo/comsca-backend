@@ -1,5 +1,5 @@
 const transactionColumns = ["id", "group_id", "cycle_id", "user_id", "type", "amount",
-  "description", "occurred_at", "created_at", "updated_at"];
+  "description", "document_type", "document_number", "occurred_at", "created_at", "updated_at"];
 
 function fail(message, status = 400) {
   throw Object.assign(new Error(message), { status });
@@ -93,19 +93,23 @@ class PaymentTransactionsHandler {
           if (debit.type !== "ASSET") fail("Debit must be an ASSET account");
           if (!creditRules[entry.type](credit)) fail(`Invalid credit account for ${entry.type}`);
         }
-        const cycle_id = input.cycle_id ?? accounts.find(account => account.cycle_id !== null)?.cycle_id ?? null;
-        if (cycle_id === null) fail("A cycle is required for a member payment");
+        const cycle = await trx("cycles").where({ group_id, status: "active" }).forUpdate().first("id");
+        if (!cycle) fail("An active cycle is required for a member payment", 409);
+        const cycle_id = cycle.id;
+        if (input.cycle_id !== null && String(input.cycle_id) !== String(cycle_id)) {
+          fail("Selected cycle must be the group's active cycle");
+        }
         if (accounts.some(account => account.cycle_id !== null && String(account.cycle_id) !== String(cycle_id))) {
           fail("Selected accounts must belong to the transaction cycle");
         }
-        const cycle = await trx("cycles").where({ id: cycle_id, group_id }).forShare().first("id");
-        if (!cycle) fail("Cycle not found in this group", 404);
         const member = await trx("users").where({ id: input.user_id, group_id }).forShare().first("id");
         if (!member) fail("Member not found in this group", 404);
         const membership = await trx("cycle_members").where({ user_id: input.user_id, cycle_id }).forShare().first("user_id");
         if (!membership) fail("Member does not belong to the transaction cycle");
+        const [receipt] = await trx("cycles").where({ id: cycle_id, group_id })
+          .increment("receipt_counter", 1).returning("receipt_counter");
         const [header] = await trx("transactions").insert({ group_id, cycle_id, user_id: input.user_id,
-          type: "PAYMENT", amount: input.amount, description: input.description }).returning("id");
+          type: "PAYMENT", document_type: "PAYMENT_RECEIPT", document_number: receipt.receipt_counter, amount: input.amount, description: input.description }).returning("id");
         const entries = [];
         const account_entries = [];
         for (const entry of input.entries) {
@@ -123,8 +127,8 @@ class PaymentTransactionsHandler {
       });
       return response.status(201).json({ success: true, ...result });
     } catch (error) {
-      if ([400, 403, 404].includes(error.status)) return response.status(error.status).json({ success: false, error: error.message });
-      if (["23503", "23514", "40001", "40P01"].includes(error.code)) {
+      if ([400, 403, 404, 409].includes(error.status)) return response.status(error.status).json({ success: false, error: error.message });
+      if (["22003", "23505", "23503", "23514", "40001", "40P01"].includes(error.code)) {
         return response.status(409).json({ success: false, error: "Payment could not be committed; refresh the selected records and retry" });
       }
       return next(error);

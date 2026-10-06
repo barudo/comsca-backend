@@ -18,12 +18,13 @@ function fixture(t) {
       { id: "111", cycle_id: "20", type: "INCOME", code: "4300" },
       { id: "120", cycle_id: "20", type: "EXPENSE", code: "5000" },
       { id: "121", cycle_id: "20", type: "LIABILITY", code: "2000" }],
-    writes: [], queries: [] };
+    receiptCounter: "0", writes: [], queries: [] };
   let header;
   Object.defineProperty(db, "transaction", { value: async fn => {
     const before = state.writes.length;
+    const counterBefore = state.receiptCounter;
     try { const result = await fn(db); if (state.error) throw state.error; return result; }
-    catch (error) { state.writes.length = before; throw error; }
+    catch (error) { state.writes.length = before; state.receiptCounter = counterBefore; throw error; }
   } });
   db.client.runner = builder => ({ run: async () => {
     const q = builder.toSQL(); state.queries.push(q);
@@ -39,7 +40,18 @@ function fixture(t) {
       assert.equal(q.bindings[0], "1");
       return state.accounts.filter(account => (account.group_id ?? "1") === q.bindings[0] && q.bindings.slice(1).includes(account.id));
     }
+    if (q.method === "update" && builder._single.table === "cycles") {
+      assert.match(q.sql, /"receipt_counter" = "receipt_counter" \+ \?/);
+      assert.deepEqual(q.bindings, [1, "20", "1"]);
+      state.receiptCounter = String(BigInt(state.receiptCounter) + 1n);
+      return [{ receipt_counter: state.receiptCounter }];
+    }
     if (q.sql.includes('from "cycles"')) {
+      if (q.sql.includes('"status" =')) {
+        assert.match(q.sql, /for update/);
+        assert.deepEqual(q.bindings, ["1", "active", 1]);
+        return state.cycle && state.cycleStatus === "active" ? { id: "20" } : undefined;
+      }
       if (q.sql.includes('"status" in')) {
         assert.deepEqual(q.bindings.slice(0, 3), ["1", "active", "distributing"]);
         return state.cycle && ["active", "distributing"].includes(state.cycleStatus) ? { id: "20" } : undefined;
@@ -210,10 +222,10 @@ test("payments POST enforces a shared cycle and group member cycle membership", 
   assert.equal((await post(input)).status, 400);
   state.membership = true;
   state.accounts.forEach(a => { a.cycle_id = null; });
-  assert.equal((await post(input)).status, 400);
+  assert.equal((await post(input)).status, 201);
   assert.equal((await post({ ...input, cycle_id: "20" })).status, 201);
   state.cycle = false;
-  assert.equal((await post({ ...input, cycle_id: "20" })).status, 404);
+  assert.equal((await post({ ...input, cycle_id: "20" })).status, 409);
   state.accounts = [];
   assert.equal((await post(input)).status, 404);
 });
@@ -457,4 +469,36 @@ test("add-expense rolls back failures at every write and at commit, sanitizing e
     assert.doesNotMatch(result.body.error, /private/);
     assert.equal(state.writes.length, 0);
   }
+});
+
+test("payments allocate one receipt per header with bigint precision and rollback on failed postings", async t => {
+  const { state, post } = fixture(t);
+  state.receiptCounter = "9007199254740992";
+  const result = await post({ ...input, entries: [share, share] });
+  assert.equal(result.status, 201);
+  assert.equal(result.body.transaction.document_type, "PAYMENT_RECEIPT");
+  assert.equal(result.body.transaction.document_number, "9007199254740993");
+  assert.equal(state.receiptCounter, "9007199254740993");
+  assert.match(state.queries.find(q => q.sql.includes('from "transactions"')).sql, /"document_type", "document_number"/);
+  for (const table of ["transactions", "transaction_entries", "account_entries"]) {
+    state.failTable = table;
+    state.writeError = Object.assign(new Error("posting failed"), { code: "23514" });
+    assert.equal((await post(input)).status, 409);
+    assert.equal(state.receiptCounter, "9007199254740993");
+  }
+  state.failTable = null;
+  assert.equal((await post(input)).body.transaction.document_number, "9007199254740994");
+});
+
+test("payments require the group's active cycle before allocating receipts", async t => {
+  const { state, post } = fixture(t);
+  for (const status of ["draft", "distributing", "closed"]) {
+    state.cycleStatus = status;
+    assert.equal((await post(input)).status, 409);
+    assert.equal(state.receiptCounter, "0");
+  }
+  state.cycleStatus = "active";
+  assert.equal((await post({ ...input, document_number: 42 })).status, 400);
+  assert.equal((await post({ ...input, document_type: "RECEIPT" })).status, 400);
+  assert.equal(state.receiptCounter, "0");
 });
