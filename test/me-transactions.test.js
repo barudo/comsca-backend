@@ -82,6 +82,7 @@ function fixture(t) {
       assert.match(query.sql, /e\.group_id = \? AND t\.group_id = \?/);
       assert.match(query.sql, /COALESCE\(e\.user_id, t\.user_id\) = \?/);
       assert.match(query.sql, /t\.cycle_id = \?/);
+      assert.match(query.sql, /t\.status = 'active'/);
       assert.match(query.sql, /COALESCE\(e\.cycle_id, t\.cycle_id\) AS cycle_id/);
       assert.match(query.sql, /t\.occurred_at AS transaction_occurred_at/);
       assert.match(query.sql, /ORDER BY t\.occurred_at ASC, t\.id ASC, e\.id ASC/);
