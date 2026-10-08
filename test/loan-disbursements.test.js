@@ -10,6 +10,8 @@ function fixture(t) {
   const state = {
     role: "OWNER",
     cycle: true,
+    cycleStatus: "active",
+    voucherCounter: "0",
     member: true,
     membership: true,
     error: null,
@@ -27,12 +29,14 @@ function fixture(t) {
   Object.defineProperty(db, "transaction", {
     value: async (fn) => {
       const before = state.writes.length;
+      const counterBefore = state.voucherCounter;
       try {
         const result = await fn(db);
         if (state.error) throw state.error;
         return result;
       } catch (error) {
         state.writes.length = before;
+        state.voucherCounter = counterBefore;
         throw error;
       }
     },
@@ -64,14 +68,22 @@ function fixture(t) {
         );
       }
       if (q.sql.includes('from "cycles"')) {
-        assert.equal(q.bindings[1], "1");
-        return state.cycle ? { id: q.bindings[0] } : undefined;
+        assert.deepEqual(q.bindings, ["1", "active", "distributing", 1]);
+        assert.match(q.sql, /for update/);
+        return state.cycle && ["active", "distributing"].includes(state.cycleStatus) ? { id: "20" } : undefined;
       }
       if (q.sql.includes('from "cycle_members"')) {
         assert.deepEqual(q.bindings, ["11", "20", 1]);
         return state.membership ? { user_id: "11" } : undefined;
       }
+      if (q.method === "update" && builder._single.table === "cycles") {
+        assert.match(q.sql, /"disbursement_voucher_counter" = "disbursement_voucher_counter" \+ \?/);
+        assert.deepEqual(q.bindings, [1, "20", "1"]);
+        state.voucherCounter = String(BigInt(state.voucherCounter) + 1n);
+        return [{ disbursement_voucher_counter: state.voucherCounter }];
+      }
       if (q.method === "insert") {
+        if (state.failTable === builder._single.table) throw Object.assign(new Error("write failed"), { code: "23514" });
         const rows = [builder._single.insert]
           .flat()
           .map((row, i) => ({
@@ -299,11 +311,11 @@ test("loan disbursements POST enforces account scope, shared cycle and member en
   state.accounts.forEach((a) => {
     a.cycle_id = null;
   });
-  assert.equal((await post(input)).status, 400);
   assert.equal(state.writes.length, 0);
+  assert.equal((await post(input)).status, 201);
   assert.equal((await post({ ...input, cycle_id: "20" })).status, 201);
   state.cycle = false;
-  assert.equal((await post({ ...input, cycle_id: "20" })).status, 404);
+  assert.equal((await post({ ...input, cycle_id: "20" })).status, 409);
 });
 
 test("loan disbursements POST rolls back and sanitizes commit and server errors", async (t) => {
@@ -320,4 +332,39 @@ test("loan disbursements POST rolls back and sanitizes commit and server errors"
   assert.equal(result.status, 500);
   assert.equal(state.writes.length, 0);
   assert.equal(result.body.error, "Internal server error");
+});
+
+test("loan vouchers increment once, preserve bigint precision, and roll back failed postings", async t => {
+  const { state, post } = fixture(t);
+  assert.equal((await post(input)).body.transaction.document_number, "1");
+  state.voucherCounter = "9007199254740992";
+  const result = await post(input);
+  assert.equal(result.status, 201);
+  assert.equal(result.body.transaction.document_type, "DISBURSEMENT_VOUCHER");
+  assert.equal(result.body.transaction.document_number, "9007199254740993");
+  assert.match(state.queries.find(q => q.sql.includes('from "transactions"')).sql, /"document_type", "document_number"/);
+  for (const table of ["transactions", "transaction_entries", "account_entries"]) {
+    state.failTable = table;
+    assert.equal((await post(input)).status, 409);
+    assert.equal(state.voucherCounter, "9007199254740993");
+  }
+  state.failTable = null;
+  state.error = Object.assign(new Error("commit failed"), { code: "40001" });
+  assert.equal((await post(input)).status, 409);
+  assert.equal(state.voucherCounter, "9007199254740993");
+  state.error = null;
+  assert.equal((await post(input)).body.transaction.document_number, "9007199254740994");
+});
+
+test("loan vouchers require the group's current writable cycle", async t => {
+  const { state, post } = fixture(t);
+  for (const cycleStatus of ["draft", "closed"]) {
+    state.cycleStatus = cycleStatus;
+    assert.equal((await post(input)).status, 409);
+    assert.equal(state.voucherCounter, "0");
+  }
+  state.cycleStatus = "distributing";
+  assert.equal((await post(input)).status, 201);
+  assert.equal((await post({ ...input, document_number: 5 })).status, 400);
+  assert.equal((await post({ ...input, document_type: "RECEIPT" })).status, 400);
 });

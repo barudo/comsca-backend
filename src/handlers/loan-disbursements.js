@@ -6,6 +6,8 @@ const transactionColumns = [
   "type",
   "amount",
   "description",
+  "document_type",
+  "document_number",
   "occurred_at",
   "created_at",
   "updated_at",
@@ -119,12 +121,18 @@ class LoanDisbursementsHandler {
             fail("Debit must be Loans Receivable (1100), an ASSET account");
           if (credit.type !== "ASSET")
             fail("Credit must be an ASSET funding account");
-          const cycle_id =
-            input.cycle_id ??
-            accounts.find((account) => account.cycle_id !== null)?.cycle_id ??
-            null;
-          if (cycle_id === null)
-            fail("A cycle is required for a member loan disbursement");
+          const cycle = await trx("cycles")
+            .where({ group_id })
+            .whereIn("status", ["active", "distributing"])
+            .orderBy("created_at", "desc")
+            .orderBy("id", "desc")
+            .forUpdate()
+            .first("id");
+          if (!cycle) fail("A current writable cycle is required for a loan disbursement", 409);
+          const cycle_id = cycle.id;
+          if (input.cycle_id !== null && String(input.cycle_id) !== String(cycle_id)) {
+            fail("Selected cycle must be the group's current cycle");
+          }
           if (
             accounts.some(
               (account) =>
@@ -134,11 +142,6 @@ class LoanDisbursementsHandler {
           ) {
             fail("Selected accounts must belong to the transaction cycle");
           }
-          const cycle = await trx("cycles")
-            .where({ id: cycle_id, group_id })
-            .forShare()
-            .first("id");
-          if (!cycle) fail("Cycle not found in this group", 404);
           const member = await trx("users")
             .where({ id: input.user_id, group_id })
             .forShare()
@@ -150,12 +153,18 @@ class LoanDisbursementsHandler {
             .first("user_id");
           if (!membership)
             fail("Member does not belong to the transaction cycle");
+          const [voucher] = await trx("cycles")
+            .where({ id: cycle_id, group_id })
+            .increment("disbursement_voucher_counter", 1)
+            .returning("disbursement_voucher_counter");
           const [header] = await trx("transactions")
             .insert({
               group_id,
               cycle_id,
               user_id: input.user_id,
               type: "LOAN_DISBURSED",
+              document_type: "DISBURSEMENT_VOUCHER",
+              document_number: voucher.disbursement_voucher_counter,
               amount: input.amount,
               description: input.description,
             })
@@ -195,11 +204,11 @@ class LoanDisbursementsHandler {
       );
       return response.status(201).json({ success: true, ...result });
     } catch (error) {
-      if ([400, 403, 404].includes(error.status))
+      if ([400, 403, 404, 409].includes(error.status))
         return response
           .status(error.status)
           .json({ success: false, error: error.message });
-      if (["23503", "23514", "40001", "40P01"].includes(error.code)) {
+      if (["22003", "23505", "23503", "23514", "40001", "40P01"].includes(error.code)) {
         return response
           .status(409)
           .json({
