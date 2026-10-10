@@ -443,7 +443,17 @@ Errors: 400 invalid input/types/membership; 401 unauthenticated; 403 unauthorize
 writer; 404 reference not found in the selected group; 409 database constraint
 or concurrent-write conflict. No new migration is required for this endpoint.
 
-`POST /api/v1/loan-apply` creates a loan application. Supply a Bearer token and
+`POST /api/v1/loans/apply` creates a loan application for a group user. Only
+OWNER, ADMIN and TREASURER can call it, supplying
+`{ "user_id": "11", "amount_desired": 2000 }`.
+
+`POST /api/v1/me/loans/apply` creates an application for the authenticated group
+user. All roles (OWNER, ADMIN, TREASURER, MEMBER and AUDITOR) can call it with
+`{ "amount_desired": 2000 }`. Supplying `user_id` is rejected.
+Both endpoints require a Bearer token and `x-group-slug` and save to
+`loan_applications` using the validation and defaults below.
+
+The existing `POST /api/v1/loan-apply` also creates a loan application. Supply a Bearer token and
 `x-group-slug`. MEMBER sends `{ "amount_desired": 2000 }`; OWNER, ADMIN and
 TREASURER send `{ "user_id": "11", "amount_desired": 2000 }`. Members cannot
 supply another user ID. The applicant must belong to the selected group and

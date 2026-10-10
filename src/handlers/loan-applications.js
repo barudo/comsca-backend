@@ -28,22 +28,38 @@ function userId(value) {
 
 class LoanApplicationsHandler {
   async create(request, response, next) {
+    return this.save(request, response, next, "legacy");
+  }
+
+  async apply(request, response, next) {
+    return this.save(request, response, next, "managed");
+  }
+
+  async applyMe(request, response, next) {
+    return this.save(request, response, next, "self");
+  }
+
+  async save(request, response, next, mode) {
     try {
       const loan_application = await request.app.locals.database.transaction(async trx => {
         const group_id = request.group.id;
         const actor = await trx("users").where({ auth_user_id: request.authUser.id, group_id })
           .forShare().first("id", "role");
-        if (!actor || !["MEMBER", "OWNER", "ADMIN", "TREASURER"].includes(actor.role)) {
-          fail("Only a MEMBER, OWNER, ADMIN or TREASURER of this group can apply for a loan", 403);
+        const roles = mode === "managed" ? ["OWNER", "ADMIN", "TREASURER"]
+          : mode === "self" ? ["MEMBER", "OWNER", "ADMIN", "TREASURER", "AUDITOR"]
+          : ["MEMBER", "OWNER", "ADMIN", "TREASURER"];
+        if (!actor || !roles.includes(actor.role)) {
+          fail("Your role in this group cannot use this loan application endpoint", 403);
         }
+        const self = mode === "self" || (mode === "legacy" && actor.role === "MEMBER");
         const body = request.body;
-        const allowed = actor.role === "MEMBER" ? ["amount_desired"] : ["user_id", "amount_desired"];
+        const allowed = self ? ["amount_desired"] : ["user_id", "amount_desired"];
         if (!body || typeof body !== "object" || Array.isArray(body) ||
             Object.keys(body).some(key => !allowed.includes(key))) {
           fail("Invalid loan application fields");
         }
         const amount_desired = amount(body.amount_desired);
-        const user_id = actor.role === "MEMBER" ? actor.id : userId(body.user_id);
+        const user_id = self ? actor.id : userId(body.user_id);
         const cycle = await trx("cycles").where({ group_id })
           .whereIn("status", ["draft", "active", "distributing"])
           .orderBy("created_at", "desc").orderBy("id", "desc")

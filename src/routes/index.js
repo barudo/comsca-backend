@@ -209,6 +209,8 @@ function createRouter(database) {
     expenses.create.bind(expenses),
   );
   router.post("/api/v1/loan-apply", authenticate, loanApplications.create.bind(loanApplications));
+  router.post("/api/v1/loans/apply", authenticate, loanApplications.apply.bind(loanApplications));
+  router.post("/api/v1/me/loans/apply", authenticate, loanApplications.applyMe.bind(loanApplications));
   router.post("/api/v1/cycles", authenticate, cycles.create.bind(cycles));
   router.put("/api/v1/cycles/:id", authenticate, cycles.update.bind(cycles));
   router.patch("/api/v1/cycles/:id", authenticate, cycles.update.bind(cycles));
