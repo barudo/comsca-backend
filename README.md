@@ -453,6 +453,13 @@ user. All roles (OWNER, ADMIN, TREASURER, MEMBER and AUDITOR) can call it with
 Both endpoints require a Bearer token and `x-group-slug` and save to
 `loan_applications` using the validation and defaults below.
 
+`GET /api/v1/me/loans/apply` returns the authenticated user's latest non-deleted
+application in the selected group across all cycles, ordered by `created_at`
+descending and then `id` descending. All group roles can call it with a Bearer
+token and `x-group-slug`. Returns 200 with
+`{ "success": true, "loan_application": { ... } }`, or `loan_application: null`
+when none exists. A caller without a user profile in the group receives 403.
+
 The existing `POST /api/v1/loan-apply` also creates a loan application. Supply a Bearer token and
 `x-group-slug`. MEMBER sends `{ "amount_desired": 2000 }`; OWNER, ADMIN and
 TREASURER send `{ "user_id": "11", "amount_desired": 2000 }`. Members cannot

@@ -27,21 +27,29 @@ function fixture(t) {
       return state.membership ? { user_id: q.bindings[0] } : undefined;
     }
     assert.equal(table, "loan_applications");
+    if (q.method === "first") {
+      assert.deepEqual(q.bindings, ["1", "10", "active", 1]);
+      assert.match(q.sql, /order by "created_at" desc, "id" desc limit \?/);
+      assert.doesNotMatch(q.sql, /"cycle_id" =/);
+      if (state.readError) throw state.readError;
+      return state.latest;
+    }
     assert.equal(q.method, "insert");
     state.writes.push(builder._single.insert);
     return [{ id: "100", ...builder._single.insert }];
   } });
   const handler = serverless(createApp(db, { getUser: async () => ({ id: "auth-user" }) }));
-  async function post(path, body, authorization = "Bearer token") {
+  async function post(path, body, authorization = "Bearer token", method = "POST") {
     const result = await handler({
       version: "2.0", rawPath: `/api/v1/${path}`, rawQueryString: "",
       headers: { "content-type": "application/json", "x-group-slug": "alpha", authorization },
-      requestContext: { http: { method: "POST", sourceIp: "127.0.0.1" } },
+      requestContext: { http: { method, sourceIp: "127.0.0.1" } },
       body: JSON.stringify(body), isBase64Encoded: false,
     }, {});
     return { status: result.statusCode, body: JSON.parse(result.body) };
   }
-  return { state, post };
+  const get = (authorization) => post("me/loans/apply", undefined, authorization, "GET");
+  return { state, post, get };
 }
 
 test("managed loan applications allow financial writers and persist the selected applicant", async t => {
@@ -106,4 +114,31 @@ test("legacy application route retains role-dependent payloads", async t => {
   assert.equal(result.body.loan_application.user_id, "10");
   state.role = "AUDITOR";
   assert.equal((await post("loan-apply", { amount_desired: 1 })).status, 403);
+});
+
+test("latest own application is scoped to the caller and group for every role across cycles", async t => {
+  const { state, get } = fixture(t);
+  state.latest = { id: "101", user_id: "10", group_id: "1", cycle_id: "19", amount_desired: "500.00", status: "active" };
+  state.cycle = false;
+  for (const role of ["OWNER", "ADMIN", "TREASURER", "MEMBER", "AUDITOR"]) {
+    state.role = role;
+    const result = await get();
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.body, { success: true, loan_application: state.latest });
+  }
+  assert.equal(state.writes.length, 0);
+});
+
+test("latest own application returns null when absent and enforces authentication and membership", async t => {
+  const { state, get } = fixture(t);
+  assert.deepEqual(await get(), { status: 200, body: { success: true, loan_application: null } });
+  assert.equal((await get("")).status, 401);
+  state.actor = false;
+  assert.equal((await get()).status, 403);
+  state.actor = true;
+  state.readError = new Error("private database details");
+  const result = await get();
+  assert.equal(result.status, 500);
+  assert.equal(result.body.error, "Internal server error");
+  assert.equal(state.writes.length, 0);
 });

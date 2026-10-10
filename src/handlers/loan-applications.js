@@ -27,6 +27,28 @@ function userId(value) {
 }
 
 class LoanApplicationsHandler {
+  async latestMe(request, response, next) {
+    try {
+      const database = request.app.locals.database;
+      const group_id = request.group.id;
+      const user = await database("users")
+        .where({ auth_user_id: request.authUser.id, group_id })
+        .first("id");
+      if (!user) {
+        return response.status(403).json({
+          success: false, error: "You do not have a user profile in this group",
+        });
+      }
+      const loan_application = await database("loan_applications")
+        .where({ group_id, user_id: user.id, status: "active" })
+        .orderBy("created_at", "desc").orderBy("id", "desc")
+        .first("*");
+      return response.json({ success: true, loan_application: loan_application || null });
+    } catch (error) {
+      return next(error);
+    }
+  }
+
   async create(request, response, next) {
     return this.save(request, response, next, "legacy");
   }
