@@ -22,6 +22,7 @@ function fixture(t) {
       family_name: "Doe",
       total_shares: "9007199254740993.99",
       remaining_loan: "100.01",
+      loan_applied: "2000.00",
       unpaid_penalties: "-1.00",
       unpaid_contributions: "0.00",
     },
@@ -74,6 +75,10 @@ function fixture(t) {
       assert.match(q.sql, /ORDER BY u.family_name, u.first_name, u.id/);
       assert.match(q.sql, /COALESCE\(e.user_id, t.user_id\)/);
       assert.match(q.sql, /LOAN_INTEREST/);
+      assert.match(q.sql, /COALESCE\(la.amount_desired, 0.00\)::text AS loan_applied/);
+      assert.match(q.sql, /a.group_id = u.group_id AND a.user_id = u.id/);
+      assert.match(q.sql, /a.cycle_id = cm.cycle_id AND a.status = 'active'/);
+      assert.match(q.sql, /ORDER BY a.created_at DESC, a.id DESC\s+LIMIT 1/);
       assert.doesNotMatch(
         q.sql,
         /account_entries|password|auth_user_id|SELECT \*/i,

@@ -53,6 +53,7 @@ test(
       );
     }
     await db("groups").insert([{ id: 1 }, { id: 2 }]);
+    await require("../migrations/029_create_loan_applications").up(db);
     await db("cycles").insert([
       { id: 20, group_id: 1, status: "active", created_at: "2026-01-01" },
       { id: 21, group_id: 1, status: "closed", created_at: "2026-02-01" },
@@ -119,6 +120,15 @@ test(
       ...[11, 14].map((user_id) => ({ cycle_id: 21, user_id })),
       { cycle_id: 22, user_id: 11 },
       { cycle_id: 30, user_id: 31 },
+    ]);
+    await db("loan_applications").insert([
+      { id: 1, group_id: 1, cycle_id: 20, user_id: 11, amount_desired: "100.00", created_at: "2026-01-01" },
+      { id: 2, group_id: 1, cycle_id: 20, user_id: 11, amount_desired: "200.00", created_at: "2026-01-02" },
+      { id: 3, group_id: 1, cycle_id: 20, user_id: 11, amount_desired: "9007199254740993.99", created_at: "2026-01-02" },
+      { id: 4, group_id: 1, cycle_id: 20, user_id: 11, amount_desired: "999.00", status: "deleted", created_at: "2026-01-03" },
+      { id: 5, group_id: 1, cycle_id: 21, user_id: 11, amount_desired: "777.00", created_at: "2026-01-04" },
+      { id: 6, group_id: 2, cycle_id: 30, user_id: 31, amount_desired: "888.00", created_at: "2026-01-04" },
+      { id: 7, group_id: 1, cycle_id: 20, user_id: 12, amount_desired: "333.00", status: "deleted" },
     ]);
     const accounts = await db("accounts")
       .insert(
@@ -244,6 +254,7 @@ test(
       ),
     );
     assert.equal(result.current_cycle_id, "20");
+    assert.deepEqual(result.members.map(member => member.loan_applied), ["9007199254740993.99", "0.00", "0.00"]);
     assert.deepEqual(
       result.members.map((m) => m.id),
       ["11", "13", "12"],
@@ -288,6 +299,7 @@ test(
         "updated_at",
         "total_shares",
         "remaining_loan",
+        "loan_applied",
         "unpaid_penalties",
         "unpaid_contributions",
       ].sort(),

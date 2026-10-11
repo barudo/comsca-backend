@@ -71,6 +71,7 @@ class CycleMembersHandler {
             u.email, u.phone, u.address, u.role, u.created_at, u.updated_at,
             COALESCE(b.total_shares, 0.00)::text AS total_shares,
             COALESCE(b.remaining_loan, 0.00)::text AS remaining_loan,
+            COALESCE(la.amount_desired, 0.00)::text AS loan_applied,
             COALESCE(b.unpaid_penalties, 0.00)::text AS unpaid_penalties,
             COALESCE(b.unpaid_contributions, 0.00)::text AS unpaid_contributions
           FROM users u
@@ -89,6 +90,14 @@ class CycleMembersHandler {
             WHERE e.group_id = ? AND t.group_id = ? AND t.cycle_id = ?
             GROUP BY COALESCE(e.user_id, t.user_id)
           ) b ON b.user_id = u.id
+          LEFT JOIN LATERAL (
+            SELECT a.amount_desired
+            FROM loan_applications a
+            WHERE a.group_id = u.group_id AND a.user_id = u.id
+              AND a.cycle_id = cm.cycle_id AND a.status = 'active'
+            ORDER BY a.created_at DESC, a.id DESC
+            LIMIT 1
+          ) la ON true
           WHERE u.group_id = ?
           ORDER BY u.family_name, u.first_name, u.id
         `,

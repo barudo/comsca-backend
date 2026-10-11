@@ -458,6 +458,11 @@ descending; members are sorted by family name, first name and ID. Deleted
 applications and other cycles are excluded. With no current cycle, returns
 `current_cycle_id: null` and `members: []`.
 
+`GET /api/v1/cycles/members` also includes `loan_applied` on each member:
+the `amount_desired` from their latest active loan application in the returned
+cycle, ordered by `created_at` then `id` descending. It is a decimal string
+(for example, `"2000.00"`), or `"0.00"` when no active application exists.
+
 `POST /api/v1/me/loans/apply` creates an application for the authenticated group
 user. All roles (OWNER, ADMIN, TREASURER, MEMBER and AUDITOR) can call it with
 `{ "amount_desired": 2000 }`. Supplying `user_id` is rejected.
