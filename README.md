@@ -447,6 +447,17 @@ or concurrent-write conflict. No new migration is required for this endpoint.
 OWNER, ADMIN and TREASURER can call it, supplying
 `{ "user_id": "11", "amount_desired": 2000 }`.
 
+`GET /api/v1/loans/apply` lists every member of the selected group's latest
+current cycle (draft, active or distributing). Requires Bearer authentication,
+`x-group-slug`, and OWNER, ADMIN, TREASURER or AUDITOR role. Returns
+`{ "success": true, "current_cycle_id": "20", "members": [...] }`.
+Each member has `id`, `group_id`, `first_name`, `family_name`, `username`, `role`
+and `loan_application`: the full latest active application for that member and
+cycle, or null when absent. Applications are ordered by `created_at` then `id`
+descending; members are sorted by family name, first name and ID. Deleted
+applications and other cycles are excluded. With no current cycle, returns
+`current_cycle_id: null` and `members: []`.
+
 `POST /api/v1/me/loans/apply` creates an application for the authenticated group
 user. All roles (OWNER, ADMIN, TREASURER, MEMBER and AUDITOR) can call it with
 `{ "amount_desired": 2000 }`. Supplying `user_id` is rejected.

@@ -11,7 +11,17 @@ function fixture(t) {
   Object.defineProperty(db, "transaction", { value: fn => fn(db) });
   db.client.runner = builder => ({ run: async () => {
     const q = builder.toSQL();
-    const table = builder._single.table;
+    const table = builder._single?.table;
+    if (q.method === "raw") {
+      assert.equal(q.sql, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY");
+      return {};
+    }
+    if (table === "users as u") {
+      assert.deepEqual(q.bindings, ["1", "20"]);
+      assert.match(q.sql, /inner join "cycle_members" as "cm" on "cm"\."user_id" = "u"\."id"/);
+      assert.doesNotMatch(q.sql, /password|auth_user_id/);
+      return state.roster || [];
+    }
     if (table === "groups") return { id: "1" };
     if (table === "users") {
       assert.equal(q.bindings[1], "1");
@@ -27,6 +37,12 @@ function fixture(t) {
       return state.membership ? { user_id: q.bindings[0] } : undefined;
     }
     assert.equal(table, "loan_applications");
+    if (q.method === "select") {
+      assert.deepEqual(q.bindings, ["1", "20", "active"]);
+      assert.match(q.sql, /select distinct on \("user_id"\) \*/);
+      assert.match(q.sql, /order by "user_id" asc, "created_at" desc, "id" desc/);
+      return state.applications || [];
+    }
     if (q.method === "first") {
       assert.deepEqual(q.bindings, ["1", "10", "active", 1]);
       assert.match(q.sql, /order by "created_at" desc, "id" desc limit \?/);
@@ -49,7 +65,8 @@ function fixture(t) {
     return { status: result.statusCode, body: JSON.parse(result.body) };
   }
   const get = (authorization) => post("me/loans/apply", undefined, authorization, "GET");
-  return { state, post, get };
+  const list = (authorization) => post("loans/apply", undefined, authorization, "GET");
+  return { state, post, get, list };
 }
 
 test("managed loan applications allow financial writers and persist the selected applicant", async t => {
@@ -140,5 +157,37 @@ test("latest own application returns null when absent and enforces authenticatio
   const result = await get();
   assert.equal(result.status, 500);
   assert.equal(result.body.error, "Internal server error");
+  assert.equal(state.writes.length, 0);
+});
+
+test("cycle applications include every member with their latest application or null", async t => {
+  const { state, list } = fixture(t);
+  state.roster = [{ id: "10", first_name: "Anne" }, { id: "11", first_name: "Ben" }];
+  const application = { id: "101", user_id: "10", cycle_id: "20", amount_desired: "2000.00", status: "active" };
+  state.applications = [application];
+  for (const role of ["OWNER", "ADMIN", "TREASURER", "AUDITOR"]) {
+    state.role = role;
+    assert.deepEqual(await list(), {
+      status: 200,
+      body: { success: true, current_cycle_id: "20", members: [
+        { ...state.roster[0], loan_application: application },
+        { ...state.roster[1], loan_application: null },
+      ] },
+    });
+  }
+  assert.equal(state.writes.length, 0);
+});
+
+test("cycle application listing handles empty cycles and requires a financial group role", async t => {
+  const { state, list } = fixture(t);
+  assert.deepEqual(await list(), { status: 200, body: { success: true, current_cycle_id: "20", members: [] } });
+  state.cycle = false;
+  assert.deepEqual(await list(), { status: 200, body: { success: true, current_cycle_id: null, members: [] } });
+  assert.equal((await list("")).status, 401);
+  state.role = "MEMBER";
+  assert.equal((await list()).status, 403);
+  state.role = "OWNER";
+  state.actor = false;
+  assert.equal((await list()).status, 403);
   assert.equal(state.writes.length, 0);
 });

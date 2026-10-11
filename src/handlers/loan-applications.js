@@ -27,6 +27,46 @@ function userId(value) {
 }
 
 class LoanApplicationsHandler {
+  async list(request, response, next) {
+    try {
+      const result = await request.app.locals.database.transaction(async trx => {
+        await trx.raw("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY");
+        const group_id = request.group.id;
+        const actor = await trx("users")
+          .where({ auth_user_id: request.authUser.id, group_id }).first("id", "role");
+        if (!actor || !["OWNER", "ADMIN", "TREASURER", "AUDITOR"].includes(actor.role)) {
+          fail("A financial role in this group is required to list loan applications", 403);
+        }
+        const cycle = await trx("cycles").where({ group_id })
+          .whereIn("status", ["draft", "active", "distributing"])
+          .orderBy("created_at", "desc").orderBy("id", "desc").first("id");
+        if (!cycle) return { success: true, current_cycle_id: null, members: [] };
+        const members = await trx("users as u")
+          .join("cycle_members as cm", "cm.user_id", "u.id")
+          .where({ "u.group_id": group_id, "cm.cycle_id": cycle.id })
+          .select("u.id", "u.group_id", "u.first_name", "u.family_name", "u.username", "u.role")
+          .orderBy("u.family_name").orderBy("u.first_name").orderBy("u.id");
+        const applications = await trx("loan_applications")
+          .where({ group_id, cycle_id: cycle.id, status: "active" })
+          .distinctOn("user_id").select("*")
+          .orderBy("user_id").orderBy("created_at", "desc").orderBy("id", "desc");
+        const byUser = new Map(applications.map(application => [String(application.user_id), application]));
+        return {
+          success: true, current_cycle_id: cycle.id,
+          members: members.map(member => ({
+            ...member, loan_application: byUser.get(String(member.id)) || null,
+          })),
+        };
+      });
+      return response.json(result);
+    } catch (error) {
+      if (error.status === 403) {
+        return response.status(403).json({ success: false, error: error.message });
+      }
+      return next(error);
+    }
+  }
+
   async latestMe(request, response, next) {
     try {
       const database = request.app.locals.database;
