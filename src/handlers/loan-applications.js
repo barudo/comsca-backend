@@ -132,8 +132,13 @@ class LoanApplicationsHandler {
         const membership = await trx("cycle_members").where({ user_id, cycle_id: cycle.id })
           .forShare().first("user_id");
         if (!membership) fail("User does not belong to the current cycle");
+        if (mode === "managed") {
+          await trx("loan_applications")
+            .where({ group_id, user_id, status: "active" })
+            .update({ status: "inactive", updated_at: trx.fn.now() });
+        }
         const [application] = await trx("loan_applications").insert({
-          group_id, user_id, cycle_id: cycle.id, amount_desired,
+          group_id, user_id, cycle_id: cycle.id, amount_desired, status: "active",
         }).returning("*");
         return application;
       });

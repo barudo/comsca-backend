@@ -8,7 +8,17 @@ function fixture(t) {
   const db = knex({ client: "pg" });
   t.after(() => db.destroy());
   const state = { role: "OWNER", actor: true, cycle: true, member: true, membership: true, writes: [] };
-  Object.defineProperty(db, "transaction", { value: fn => fn(db) });
+  state.updates = [];
+  Object.defineProperty(db, "transaction", { value: async fn => {
+    const writes = state.writes.length;
+    const updates = state.updates.length;
+    try { return await fn(db); }
+    catch (error) {
+      state.writes.length = writes;
+      state.updates.length = updates;
+      throw error;
+    }
+  } });
   db.client.runner = builder => ({ run: async () => {
     const q = builder.toSQL();
     const table = builder._single?.table;
@@ -37,6 +47,13 @@ function fixture(t) {
       return state.membership ? { user_id: q.bindings[0] } : undefined;
     }
     assert.equal(table, "loan_applications");
+    if (q.method === "update") {
+      assert.deepEqual(q.bindings, ["inactive", "1", "11", "active"]);
+      assert.match(q.sql, /"updated_at" = CURRENT_TIMESTAMP/);
+      assert.doesNotMatch(q.sql, /cycle_id/);
+      state.updates.push(q);
+      return 2;
+    }
     if (q.method === "select") {
       assert.deepEqual(q.bindings, ["1", "20", "active"]);
       assert.match(q.sql, /select distinct on \("user_id"\) \*/);
@@ -51,6 +68,7 @@ function fixture(t) {
       return state.latest;
     }
     assert.equal(q.method, "insert");
+    if (state.insertError) throw state.insertError;
     state.writes.push(builder._single.insert);
     return [{ id: "100", ...builder._single.insert }];
   } });
@@ -75,7 +93,7 @@ test("managed loan applications allow financial writers and persist the selected
     state.role = role;
     const result = await post("loans/apply", { user_id: "11", amount_desired: 2000 });
     assert.equal(result.status, 201);
-    assert.deepEqual(state.writes.at(-1), { group_id: "1", user_id: "11", cycle_id: "20", amount_desired: "2000.00" });
+    assert.deepEqual(state.writes.at(-1), { group_id: "1", user_id: "11", cycle_id: "20", amount_desired: "2000.00", status: "active" });
     assert.equal(result.body.loan_application.user_id, "11");
   }
   for (const role of ["MEMBER", "AUDITOR"]) {
@@ -83,6 +101,19 @@ test("managed loan applications allow financial writers and persist the selected
     assert.equal((await post("loans/apply", { user_id: "11", amount_desired: 2000 })).status, 403);
   }
   assert.equal(state.writes.length, 3);
+  assert.equal(state.updates.length, 3);
+});
+
+test("managed application deactivation rolls back on failed insert and follows validation", async t => {
+  const { state, post } = fixture(t);
+  state.membership = false;
+  assert.equal((await post("loans/apply", { user_id: "11", amount_desired: 1 })).status, 400);
+  assert.equal(state.updates.length, 0);
+  state.membership = true;
+  state.insertError = Object.assign(new Error("insert failed"), { code: "23514" });
+  assert.equal((await post("loans/apply", { user_id: "11", amount_desired: 1 })).status, 409);
+  assert.equal(state.updates.length, 0);
+  assert.equal(state.writes.length, 0);
 });
 
 test("self applications use authenticated identity for every group role and reject overrides", async t => {

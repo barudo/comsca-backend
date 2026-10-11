@@ -446,6 +446,12 @@ or concurrent-write conflict. No new migration is required for this endpoint.
 `POST /api/v1/loans/apply` creates a loan application for a group user. Only
 OWNER, ADMIN and TREASURER can call it, supplying
 `{ "user_id": "11", "amount_desired": 2000 }`.
+After validation, this endpoint marks the user's active applications in the
+selected group (across cycles) as `inactive` and updates their `updated_at`,
+then inserts the new application with `status: "active"` in the same transaction.
+Deleted records retain their status. Apply migration
+`033_allow_inactive_loan_applications.js` before using this behavior.
+The self-service and legacy POST endpoints retain their existing behavior.
 
 `GET /api/v1/loans/apply` lists every member of the selected group's latest
 current cycle (draft, active or distributing). Requires Bearer authentication,
