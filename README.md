@@ -86,7 +86,8 @@ migration conversion, preflight checks, API compatibility changes, and rollback.
 ## Get the latest current cycle
 
 `GET /api/v1/cycles` requires a Bearer token and an
-OWNER/ADMIN database profile in the group selected by `x-group-slug`.
+authenticated database profile in the group selected by `x-group-slug`.
+All group roles (OWNER, ADMIN, TREASURER, AUDITOR, and MEMBER) can list cycles.
 Apply migrations through `017_add_cycle_subscription_and_share_limit.js` before deploying this
 endpoint; migration 016 grants the existing RLS reader access to `name`,
 `description`, `absence_penalty`, and `required_monthly_contribution` without

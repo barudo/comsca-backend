@@ -99,8 +99,8 @@ class CyclesHandler {
       const actor = await db("users").where({
         auth_user_id: request.authUser.id, group_id: request.group.id,
       }).first("id", "role");
-      if (!actor || !["OWNER", "ADMIN"].includes(actor.role)) {
-        return response.status(403).json({ success: false, error: "Only an OWNER or ADMIN of this group can list cycles" });
+      if (!actor || !["OWNER", "ADMIN", "TREASURER", "AUDITOR", "MEMBER"].includes(actor.role)) {
+        return response.status(403).json({ success: false, error: "A valid user role in this group is required to list cycles" });
       }
       const cycles = await db.transaction(async trx => {
         await trx.raw("SET LOCAL ROLE comsca_group_reader");

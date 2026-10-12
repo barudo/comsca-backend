@@ -55,9 +55,9 @@ function fixture(t) {
   return { state, get };
 }
 
-test("GET cycles returns only the latest qualifying cycle for OWNER/ADMIN", async t => {
+test("GET cycles returns only the latest qualifying cycle for all group roles", async t => {
   const { state, get } = fixture(t);
-  for (const role of ["OWNER", "ADMIN"]) {
+  for (const role of ["OWNER", "ADMIN", "TREASURER", "AUDITOR", "MEMBER"]) {
     state.role = role;
     for (const status of ["draft", "active", "distributing"]) {
       state.cycles[1].status = status;
@@ -77,14 +77,14 @@ test("GET cycles returns only the latest qualifying cycle for OWNER/ADMIN", asyn
   assert.ok(sql.indexOf("SET LOCAL ROLE comsca_group_reader") < sql.findIndex(query => query.includes('from "cycles"')));
 });
 
-test("GET cycles rejects unauthenticated, non-manager and cross-group access before reading cycles", async t => {
+test("GET cycles rejects unauthenticated, invalid-role and cross-group access before reading cycles", async t => {
   const { state, get } = fixture(t);
   for (const path of ["/api/v1/cycles"]) {
     assert.equal((await get(path, { authorization: "" })).status, 401);
     assert.equal((await get(path, { "x-group-slug": "" })).status, 400);
     assert.equal((await get(path, { "x-group-slug": "unknown" })).status, 404);
     assert.equal((await get(path, { "x-group-slug": "beta" })).status, 403);
-    for (const role of ["MEMBER", "TREASURER", "AUDITOR", null, "admin"]) {
+    for (const role of [null, "admin"]) {
       state.role = role;
       assert.equal((await get(path)).status, 403);
     }
