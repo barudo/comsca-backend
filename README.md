@@ -813,7 +813,7 @@ required.
 
 `GET /api/v1/dashboard` returns financial and membership totals for the selected
 group's current active or distributing cycle. It requires a Bearer token and
-`x-group-slug`; OWNER, ADMIN, TREASURER, and AUDITOR are allowed. Group and cycle
+`x-group-slug`; all group roles (OWNER, ADMIN, TREASURER, AUDITOR, and MEMBER) are allowed. Group and cycle
 query parameters do not change the resolved scope.
 
 ```json

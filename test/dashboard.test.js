@@ -124,9 +124,9 @@ function fixture(t) {
   return { state, get };
 }
 
-test("dashboard returns exact current-cycle totals for financial reader roles", async (t) => {
+test("dashboard returns exact current-cycle totals for all group roles", async (t) => {
   const { state, get } = fixture(t);
-  for (const role of ["OWNER", "ADMIN", "TREASURER", "AUDITOR"]) {
+  for (const role of ["OWNER", "ADMIN", "TREASURER", "AUDITOR", "MEMBER"]) {
     state.role = role;
     const result = await get();
     assert.equal(result.status, 200);
@@ -160,14 +160,14 @@ test("dashboard returns zero totals and null cycle when there is no active cycle
   );
 });
 
-test("dashboard rejects unauthenticated and non-financial cross-group callers", async (t) => {
+test("dashboard rejects unauthenticated, invalid-role and cross-group callers", async (t) => {
   const { state, get } = fixture(t);
   assert.equal((await get({ authorization: "" })).status, 401);
   state.invalidToken = true;
   assert.equal((await get()).status, 401);
   state.invalidToken = false;
   assert.equal((await get({ "x-group-slug": "beta" })).status, 403);
-  for (const role of ["MEMBER", null, "owner"]) {
+  for (const role of [null, "owner"]) {
     state.role = role;
     assert.equal((await get()).status, 403);
   }

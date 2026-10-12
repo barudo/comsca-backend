@@ -22,11 +22,11 @@ class DashboardHandler {
             .first("id", "role");
           if (
             !actor ||
-            !["OWNER", "ADMIN", "TREASURER", "AUDITOR"].includes(actor.role)
+            !["OWNER", "ADMIN", "TREASURER", "AUDITOR", "MEMBER"].includes(actor.role)
           ) {
             throw Object.assign(
               new Error(
-                "A financial role in this group is required to view the dashboard",
+                "A valid user role in this group is required to view the dashboard",
               ),
               { status: 403 },
             );
