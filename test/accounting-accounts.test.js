@@ -61,31 +61,36 @@ function fixture(t) {
   return { state, get };
 }
 
-test("accounting accounts return grouped current-cycle journal balances", async (t) => {
+test("accounting accounts return grouped current-cycle journal balances for all group roles", async (t) => {
   const { state, get } = fixture(t);
   state.rows = [
     { id: "1", code: "1000", name: "Cash", type: "ASSET", current_balance: "125.00", total_balance: "125.00" },
     { id: "2", code: "3000", name: "Share capital", type: "EQUITY", current_balance: "125.00", total_balance: "125.00" },
     { id: "3", code: "4000", name: "Interest income", type: "INCOME", current_balance: "12.50", total_balance: "12.50" },
   ];
-  const result = await get();
-  assert.equal(result.status, 200);
-  assert.equal(result.body.current_cycle_id, "20");
-  assert.deepEqual(result.body.accounts, [
-    { type: "ASSET", total_balance: "125.00", sub_accounts: [{ id: "1", code: "1000", name: "Cash", current_balance: "125.00" }] },
-    { type: "LIABILITY", total_balance: "0.00", sub_accounts: [] },
-    { type: "EQUITY", total_balance: "125.00", sub_accounts: [{ id: "2", code: "3000", name: "Share capital", current_balance: "125.00" }] },
-    { type: "INCOME", total_balance: "12.50", sub_accounts: [{ id: "3", code: "4000", name: "Interest income", current_balance: "12.50" }] },
-    { type: "EXPENSE", total_balance: "0.00", sub_accounts: [] },
-  ]);
+  for (const role of ["OWNER", "ADMIN", "TREASURER", "AUDITOR", "MEMBER"]) {
+    state.role = role;
+    const result = await get();
+    assert.equal(result.status, 200);
+    assert.equal(result.body.current_cycle_id, "20");
+    assert.deepEqual(result.body.accounts, [
+      { type: "ASSET", total_balance: "125.00", sub_accounts: [{ id: "1", code: "1000", name: "Cash", current_balance: "125.00" }] },
+      { type: "LIABILITY", total_balance: "0.00", sub_accounts: [] },
+      { type: "EQUITY", total_balance: "125.00", sub_accounts: [{ id: "2", code: "3000", name: "Share capital", current_balance: "125.00" }] },
+      { type: "INCOME", total_balance: "12.50", sub_accounts: [{ id: "3", code: "4000", name: "Interest income", current_balance: "12.50" }] },
+      { type: "EXPENSE", total_balance: "0.00", sub_accounts: [] },
+    ]);
+  }
 });
 
 test("accounting accounts restrict access and return zeroed types without an active cycle", async (t) => {
   const { state, get } = fixture(t);
   assert.equal((await get({ authorization: "" })).status, 401);
   assert.equal((await get({ "x-group-slug": "beta" })).status, 403);
-  state.role = "MEMBER";
-  assert.equal((await get()).status, 403);
+  for (const role of [null, "member", "UNKNOWN"]) {
+    state.role = role;
+    assert.equal((await get()).status, 403);
+  }
   state.role = "OWNER";
   state.cycle = undefined;
   const result = await get();

@@ -812,6 +812,11 @@ required.
 
 ### Dashboard
 
+`GET /api/v1/accounting/accounts` returns grouped account balances for the
+selected group's current active or distributing cycle. All group roles
+(OWNER, ADMIN, TREASURER, AUDITOR, and MEMBER) can access it with a Bearer token
+and `x-group-slug`.
+
 `GET /api/v1/dashboard` returns financial and membership totals for the selected
 group's current active or distributing cycle. It requires a Bearer token and
 `x-group-slug`; all group roles (OWNER, ADMIN, TREASURER, AUDITOR, and MEMBER) are allowed. Group and cycle

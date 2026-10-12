@@ -13,10 +13,10 @@ class AccountingAccountsHandler {
           .first("id", "role");
         if (
           !actor ||
-          !["OWNER", "ADMIN", "TREASURER", "AUDITOR"].includes(actor.role)
+          !["OWNER", "ADMIN", "TREASURER", "AUDITOR", "MEMBER"].includes(actor.role)
         ) {
           throw Object.assign(
-            new Error("A financial role in this group is required to view accounts"),
+            new Error("A valid user role in this group is required to view accounts"),
             { status: 403 },
           );
         }
