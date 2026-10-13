@@ -772,8 +772,9 @@ group returns 403. No migration is required.
 
 `GET /api/v1/accounting/income-statement` returns journal-derived income and
 expense amounts for the selected group's active or distributing cycle. Supply
-`Authorization: Bearer <access_token>` and `x-group-slug`. OWNER, ADMIN,
-TREASURER, and AUDITOR are allowed; client-supplied group or cycle parameters do
+`Authorization: Bearer <access_token>` and `x-group-slug`. All authenticated
+users with a profile in the selected group are allowed, regardless of role;
+client-supplied group or cycle parameters do
 not change the resolved scope.
 
 Optional `from` and `to` query parameters use the exact `YYYY-MM-DD` format.

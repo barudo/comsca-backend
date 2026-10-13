@@ -152,20 +152,19 @@ test("invalid dates and reversed ranges return 400 without reading statement row
   }
 });
 
-test("income statement authorizes financial roles and returns empty totals without a current cycle", async (t) => {
+test("income statement authorizes all group roles and returns empty totals without a current cycle", async (t) => {
   const { state, get } = fixture(t);
   assert.equal((await get("", { authorization: "" })).status, 401);
   assert.equal((await get("", { "x-group-slug": "beta" })).status, 403);
   assert.equal(state.statementQueries.length, 0);
 
-  for (const role of ["OWNER", "ADMIN", "TREASURER", "AUDITOR"]) {
+  for (const role of ["OWNER", "ADMIN", "TREASURER", "AUDITOR", "MEMBER"]) {
     state.role = role;
     assert.equal((await get()).status, 200);
   }
   state.queries.length = 0;
   state.statementQueries.length = 0;
-  state.role = "MEMBER";
-  assert.equal((await get()).status, 403);
+  assert.equal((await get("", { "x-group-slug": "beta" })).status, 403);
   assert.equal(state.statementQueries.length, 0);
   assert.equal(state.queries.some((query) => query.sql.includes('from "cycles"')), false);
 
