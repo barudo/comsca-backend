@@ -24,19 +24,29 @@ function fixture(t) {
     ],
     writes: [],
     queries: [],
+    applications: [],
   };
   let header;
+  const transactionBuilders = new WeakSet();
+  const trx = (table) => {
+    const builder = db(table);
+    transactionBuilders.add(builder);
+    return builder;
+  };
+  trx.fn = db.fn;
   Object.defineProperty(db, "transaction", {
     value: async (fn) => {
       const before = state.writes.length;
       const counterBefore = state.voucherCounter;
+      const applicationsBefore = structuredClone(state.applications);
       try {
-        const result = await fn(db);
+        const result = await fn(trx);
         if (state.error) throw state.error;
         return result;
       } catch (error) {
         state.writes.length = before;
         state.voucherCounter = counterBefore;
+        state.applications = applicationsBefore;
         throw error;
       }
     },
@@ -81,6 +91,24 @@ function fixture(t) {
         assert.deepEqual(q.bindings, [1, "20", "1"]);
         state.voucherCounter = String(BigInt(state.voucherCounter) + 1n);
         return [{ disbursement_voucher_counter: state.voucherCounter }];
+      }
+      if (q.method === "update" && builder._single.table === "loan_applications") {
+        if (state.failTable === "loan_applications") throw Object.assign(new Error("write failed"), { code: "23514" });
+        assert.match(q.sql, /set "status" = \?, "amount_disbursed" = \?, "updated_at" = CURRENT_TIMESTAMP where "group_id" = \? and "user_id" = \?$/);
+        assert.ok(transactionBuilders.has(builder), "application update must use the transaction");
+        const [status, amount, groupId, userId] = q.bindings;
+        assert.equal(groupId, "1");
+        assert.equal(userId, "11");
+        let affected = 0;
+        for (const application of state.applications) {
+          if (application.group_id === groupId && application.user_id === userId) {
+            affected++;
+            application.status = status;
+            application.amount_disbursed = amount;
+            application.updated_at = "now";
+          }
+        }
+        return affected;
       }
       if (q.method === "insert") {
         if (state.failTable === builder._single.table) throw Object.assign(new Error("write failed"), { code: "23514" });
@@ -257,6 +285,7 @@ test("loan disbursements POST rejects invalid money, identifiers, descriptions a
     assert.equal((await post(body)).status, 400, JSON.stringify(body));
   assert.equal((await post(input, {}, '{"user_id":')).status, 400);
   assert.equal(state.writes.length, 0);
+  assert.ok(!state.queries.some(q => q.sql.startsWith('update "loan_applications"')));
 });
 
 test("loan disbursements POST authenticates and scopes financial writers to the header group", async (t) => {
@@ -269,6 +298,7 @@ test("loan disbursements POST authenticates and scopes financial writers to the 
     assert.equal((await post(input)).status, 403);
   }
   assert.equal(state.writes.length, 0);
+  assert.ok(!state.queries.some(q => q.sql.startsWith('update "loan_applications"')));
   assert.equal(
     state.queries.some((q) => q.sql.includes('from "accounts"')),
     false,
@@ -367,4 +397,56 @@ test("loan vouchers require the group's current writable cycle", async t => {
   assert.equal((await post(input)).status, 201);
   assert.equal((await post({ ...input, document_number: 5 })).status, 400);
   assert.equal((await post({ ...input, document_type: "RECEIPT" })).status, 400);
+});
+
+test("disbursement updates all member applications across cycles and statuses only within the group", async t => {
+  const { state, post } = fixture(t);
+  state.applications = [
+    ...["active", "inactive", "deleted"].map((status, i) => ({
+      id: String(i + 1), group_id: "1", user_id: "11", cycle_id: String(20 - i),
+      status, amount_disbursed: "100.00", updated_at: "before",
+    })),
+    { id: "4", group_id: "1", user_id: "12", status: "active", amount_disbursed: "0.00" },
+    { id: "5", group_id: "2", user_id: "11", status: "active", amount_disbursed: "0.00" },
+  ];
+  const others = structuredClone(state.applications.slice(3));
+  for (const amount of ["9999999999999999.99", "0.01"]) {
+    assert.equal((await post({ ...input, amount })).status, 201);
+    for (const application of state.applications.slice(0, 3)) {
+      assert.equal(application.status, "inactive");
+      assert.equal(application.amount_disbursed, amount);
+      assert.equal(application.updated_at, "now");
+    }
+    assert.deepEqual(state.applications.slice(3), others);
+  }
+});
+
+test("application update and accounting records roll back together on failure", async t => {
+  const { state, post } = fixture(t);
+  const original = [{ group_id: "1", user_id: "11", status: "active", amount_disbursed: "0.00" }];
+  state.applications = structuredClone(original);
+  for (const table of ["account_entries", "loan_applications"]) {
+    state.failTable = table;
+    assert.equal((await post(input)).status, 409);
+    assert.deepEqual(state.applications, original);
+    assert.equal(state.writes.length, 0);
+    assert.equal(state.voucherCounter, "0");
+  }
+  state.failTable = null;
+  state.error = Object.assign(new Error("commit failed"), { code: "40001" });
+  assert.equal((await post(input)).status, 409);
+  assert.deepEqual(state.applications, original);
+  assert.equal(state.writes.length, 0);
+  assert.equal(state.voucherCounter, "0");
+});
+
+test("disbursement succeeds with only unrelated loan applications", async t => {
+  const { state, post } = fixture(t);
+  const original = [
+    { group_id: "1", user_id: "12", status: "active", amount_disbursed: "0.00" },
+    { group_id: "2", user_id: "11", status: "active", amount_disbursed: "0.00" },
+  ];
+  state.applications = structuredClone(original);
+  assert.equal((await post(input)).status, 201);
+  assert.deepEqual(state.applications, original);
 });

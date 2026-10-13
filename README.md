@@ -353,6 +353,10 @@ schema cannot preserve; use a verified backup for incompatible downgrades.
 
 `POST /api/v1/transactions/disburse-loans` records a loan issued to a member.
 Requires a Bearer token and `x-group-slug`; OWNER, ADMIN and TREASURER may post.
+In the same database transaction, all loan applications for that member in the
+group (across all cycles and statuses) become `inactive`, with `amount_disbursed`
+set to this disbursement's amount and `updated_at` refreshed. The amount replaces
+any previous value. A member without loan applications can still receive a loan.
 
 ```json
 {

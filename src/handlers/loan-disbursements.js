@@ -196,6 +196,13 @@ class LoanDisbursementsHandler {
               },
             ])
             .returning("*");
+          await trx("loan_applications")
+            .where({ group_id, user_id: input.user_id })
+            .update({
+              status: "inactive",
+              amount_disbursed: input.amount,
+              updated_at: trx.fn.now(),
+            });
           const transaction = await trx("transactions")
             .where({ id: header.id, group_id })
             .first(transactionColumns);
