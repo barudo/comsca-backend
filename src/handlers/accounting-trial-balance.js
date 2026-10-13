@@ -8,13 +8,10 @@ class AccountingTrialBalanceHandler {
         const groupId = request.group.id;
         const actor = await trx("users")
           .where({ auth_user_id: request.authUser.id, group_id: groupId })
-          .first("id", "role");
-        if (
-          !actor ||
-          !["OWNER", "ADMIN", "TREASURER", "AUDITOR"].includes(actor.role)
-        ) {
+          .first("id");
+        if (!actor) {
           throw Object.assign(
-            new Error("A financial role in this group is required to view the trial balance"),
+            new Error("You do not have a user profile in this group"),
             { status: 403 },
           );
         }

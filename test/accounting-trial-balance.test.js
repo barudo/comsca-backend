@@ -99,13 +99,12 @@ test("trial balance rejects unauthorized callers and returns zero totals without
   assert.equal((await get({ authorization: "" })).status, 401);
   assert.equal((await get({ "x-group-slug": "beta" })).status, 403);
 
-  for (const role of ["OWNER", "ADMIN", "TREASURER", "AUDITOR"]) {
+  for (const role of ["OWNER", "ADMIN", "TREASURER", "AUDITOR", "MEMBER"]) {
     state.role = role;
     assert.equal((await get()).status, 200);
   }
   state.queries.length = 0;
-  state.role = "MEMBER";
-  assert.equal((await get()).status, 403);
+  assert.equal((await get({ "x-group-slug": "beta" })).status, 403);
   assert.equal(
     state.queries.some((query) => query.sql.includes('from "cycles"')),
     false,

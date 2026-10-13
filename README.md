@@ -728,8 +728,9 @@ migration is required.
 
 `GET /api/v1/accounting/trial-balance` returns journal-derived totals for each
 account in the selected group's active or distributing cycle. Supply
-`Authorization: Bearer <access_token>` and `x-group-slug`. OWNER, ADMIN,
-TREASURER, and AUDITOR are allowed; request query parameters cannot override the
+`Authorization: Bearer <access_token>` and `x-group-slug`. All authenticated
+users with a profile in the selected group are allowed, regardless of role;
+request query parameters cannot override the
 group or cycle scope.
 
 ```json
