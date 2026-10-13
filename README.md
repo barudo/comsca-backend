@@ -690,8 +690,9 @@ not calculated balances. Responses are not cacheable. Missing authentication is
 
 `GET /api/v1/accounting/balance-sheet` returns journal-derived balances for the
 selected group's active or distributing cycle. Supply
-`Authorization: Bearer <access_token>` and `x-group-slug`. OWNER, ADMIN,
-TREASURER, and AUDITOR are allowed; request query parameters cannot override
+`Authorization: Bearer <access_token>` and `x-group-slug`. All authenticated
+users with a profile in the selected group are allowed, regardless of role;
+request query parameters cannot override
 the group or cycle scope.
 
 ```json
