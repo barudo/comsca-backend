@@ -1447,6 +1447,12 @@ empty roster, or a concurrent integrity conflict returns 409 with no partial wri
 
 ### Charge penalties
 
+Penalty charges share the cycle's `journal_voucher_counter` sequence with
+interest and contribution charges. Each successful request increments it once,
+regardless of member or posting batch count, and stores and returns
+`document_number` and `document_type: "JOURNAL_VOUCHER"` on the transaction.
+Rejected requests and failed writes consume no number.
+
 `POST /api/v1/penalties/charge` requires `Authorization: Bearer <token>`,
 `x-group-slug`, and `Content-Type: application/json`. The caller must be an
 OWNER, ADMIN, or TREASURER in the selected group.

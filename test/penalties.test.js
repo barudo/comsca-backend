@@ -10,6 +10,8 @@ function fixture(t) {
   const state = {
     role: "OWNER",
     cycle: true,
+    voucherCounter: "0",
+    queries: [],
     members: [{ user_id: "11" }, { user_id: "12" }, { user_id: "13" }],
     error: null,
     accounts: [
@@ -23,12 +25,14 @@ function fixture(t) {
   Object.defineProperty(db, "transaction", {
     value: async (fn) => {
       const before = state.writes.length;
+      const counterBefore = state.voucherCounter;
       try {
         const result = await fn(db);
         if (state.error) throw state.error;
         return result;
       } catch (error) {
         state.writes.length = before;
+        state.voucherCounter = counterBefore;
         throw error;
       }
     },
@@ -36,6 +40,7 @@ function fixture(t) {
   db.client.runner = (builder) => ({
     run: async () => {
       const q = builder.toSQL();
+      state.queries.push(q);
       if (q.sql.includes('from "groups"'))
         return q.bindings[0] === "alpha"
           ? { id: "1" }
@@ -71,7 +76,19 @@ function fixture(t) {
         assert.match(q.sql, /inner join "users".*for share/);
         return state.members;
       }
+      if (q.method === "update" && builder._single.table === "cycles") {
+        assert.match(q.sql, /"journal_voucher_counter" = "journal_voucher_counter" \+ \?/);
+        assert.deepEqual(q.bindings, [1, "20", "1"]);
+        if (state.voucherCounter === "9223372036854775807") throw Object.assign(new Error("bigint overflow"), { code: "22003" });
+        state.voucherCounter = String(BigInt(state.voucherCounter) + 1n);
+        return [{ journal_voucher_counter: state.voucherCounter }];
+      }
       if (q.method === "insert") {
+        if (state.failTable === builder._single.table ||
+            (state.failLaterBatch && builder._single.table === "account_entries" &&
+             state.writes.some(write => write.table === "account_entries"))) {
+          throw Object.assign(new Error("write failed"), { code: "23514" });
+        }
         const rows = [builder._single.insert]
           .flat()
           .map((row) => ({ id: String(nextId++), ...row }));
@@ -204,7 +221,7 @@ test("penalty charge validates amounts, IDs and supported fields before writes",
     [],
     {},
     { ...input, debit: "102" },
-    ...["group_id", "cycle_id", "user_id", "type", "entries"].map((field) => ({
+    ...["group_id", "cycle_id", "user_id", "type", "entries", "document_type", "document_number", "journal_voucher_counter"].map((field) => ({
       ...input,
       [field]: "1",
     })),
@@ -217,6 +234,7 @@ test("penalty charge validates amounts, IDs and supported fields before writes",
   }
   assert.equal((await post(input, {}, '{"amount":')).status, 400);
   assert.equal(state.writes.length, 0);
+  assert.equal(state.voucherCounter, "0");
 });
 
 test("penalty charge requires authentication and a financial role in the group", async (t) => {
@@ -229,6 +247,7 @@ test("penalty charge requires authentication and a financial role in the group",
     assert.equal((await post(input)).status, 403);
   }
   assert.equal(state.writes.length, 0);
+  assert.equal(state.voucherCounter, "0");
 });
 
 test("penalty charge requires a current cycle, enrolled members and the correct scoped accounts", async (t) => {
@@ -255,6 +274,7 @@ test("penalty charge requires a current cycle, enrolled members and the correct 
     }
   }
   assert.equal(state.writes.length, 0);
+  assert.equal(state.voucherCounter, "0");
 });
 
 test("penalty charge preserves exact cents and rejects aggregate overflow", async (t) => {
@@ -264,6 +284,7 @@ test("penalty charge preserves exact cents and rejects aggregate overflow", asyn
     400,
   );
   assert.equal(state.writes.length, 0);
+  assert.equal(state.voucherCounter, "0");
   const maximum = await post({ ...input, amount: "3333333333333333.33" });
   assert.equal(maximum.status, 201);
   assert.equal(maximum.body.transaction.amount, "9999999999999999.99");
@@ -280,9 +301,50 @@ test("penalty charge rolls back commit conflicts and hides unexpected errors", a
     const result = await post(input);
     assert.equal(result.status, 409);
     assert.equal(state.writes.length, 0);
+  assert.equal(state.voucherCounter, "0");
     assert.doesNotMatch(result.body.error, /private/);
   }
   state.error = new Error("private details");
   assert.equal((await post(input)).status, 500);
   assert.equal(state.writes.length, 0);
+  assert.equal(state.voucherCounter, "0");
+});
+
+test("penalty vouchers increment once for a batched roster and preserve bigint precision", async t => {
+  const { state, post } = fixture(t);
+  state.members = Array.from({ length: 1001 }, (_, i) => ({ user_id: String(i + 100) }));
+  const first = await post(input);
+  assert.equal(first.status, 201);
+  assert.equal(first.body.transaction.document_type, "JOURNAL_VOUCHER");
+  assert.equal(first.body.transaction.document_number, "1");
+  assert.equal(first.body.entries.length, 1001);
+  assert.equal(state.voucherCounter, "1");
+  assert.match(state.queries.find(q => q.sql.includes('from "transactions"')).sql, /"document_type", "document_number"/);
+  state.writes = [];
+  state.failLaterBatch = true;
+  assert.equal((await post(input)).status, 409);
+  assert.equal(state.writes.length, 0);
+  assert.equal(state.voucherCounter, "1");
+  state.failLaterBatch = false;
+  state.voucherCounter = "9007199254740992";
+  assert.equal((await post(input)).body.transaction.document_number, "9007199254740993");
+  const writesBefore = state.writes.length;
+  for (const table of ["transactions", "transaction_entries", "account_entries"]) {
+    state.failTable = table;
+    assert.equal((await post(input)).status, 409);
+    assert.equal(state.voucherCounter, "9007199254740993");
+    assert.equal(state.writes.length, writesBefore);
+  }
+  state.failTable = null;
+  assert.equal((await post(input)).body.transaction.document_number, "9007199254740994");
+});
+
+test("penalty voucher overflow preserves the counter without accounting writes", async t => {
+  const { state, post } = fixture(t);
+  state.voucherCounter = "9223372036854775807";
+  const result = await post(input);
+  assert.equal(result.status, 409);
+  assert.equal(state.voucherCounter, "9223372036854775807");
+  assert.equal(state.writes.length, 0);
+  assert.doesNotMatch(result.body.error, /bigint overflow/);
 });

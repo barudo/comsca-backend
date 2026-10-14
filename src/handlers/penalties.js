@@ -6,6 +6,8 @@ const transactionColumns = [
   "type",
   "amount",
   "description",
+  "document_type",
+  "document_number",
   "occurred_at",
   "created_at",
   "updated_at",
@@ -146,12 +148,18 @@ class PenaltiesHandler {
           if (credit.type !== "INCOME" || credit.code !== "4100") {
             fail("Credit must be Penalty Income (4100), an INCOME account");
           }
+          const [voucher] = await trx("cycles")
+            .where({ id: cycle.id, group_id })
+            .increment("journal_voucher_counter", 1)
+            .returning("journal_voucher_counter");
           const [header] = await trx("transactions")
             .insert({
               group_id,
               cycle_id: cycle.id,
               user_id: null,
               type: "PENALTY",
+              document_type: "JOURNAL_VOUCHER",
+              document_number: voucher.journal_voucher_counter,
               amount,
               description: input.description,
             })
@@ -207,7 +215,7 @@ class PenaltiesHandler {
           .json({ success: false, error: error.message });
       }
       if (
-        ["23001", "23503", "23505", "23514", "40001", "40P01"].includes(
+        ["22003", "23001", "23503", "23505", "23514", "40001", "40P01"].includes(
           error.code,
         )
       ) {

@@ -2592,18 +2592,33 @@ test(
           const response = await handler({ ...event(body), rawPath: "/api/v1/contributions/charge" }, {});
           return { status: response.statusCode, body: JSON.parse(response.body) };
         };
+        const penaltyBody = {
+          debit: accounts.find(account => account.code === "1300").id,
+          credit: accounts.find(account => account.code === "4100").id,
+          amount: "1.00",
+        };
+        const postPenalty = async (body = penaltyBody) => {
+          const response = await handler({ ...event(body), rawPath: "/api/v1/penalties/charge" }, {});
+          return { status: response.statusCode, body: JSON.parse(response.body) };
+        };
         const contribution = await postContribution();
         assert.equal(contribution.status, 201);
         assert.equal(contribution.body.transaction.document_number, "3");
         assert.equal((await post()).body.transaction.document_number, "4");
         assert.equal((await postContribution({ ...contributionBody, amount: "0" })).status, 400);
         assert.equal(await journalCounter(), "4");
+        const penalty = await postPenalty();
+        assert.equal(penalty.status, 201);
+        assert.equal(penalty.body.transaction.document_number, "5");
+        assert.equal(penalty.body.transaction.document_type, "JOURNAL_VOUCHER");
+        assert.equal((await postPenalty({ ...penaltyBody, amount: "0" })).status, 400);
+        assert.equal(await journalCounter(), "5");
         await db("cycles").where({ id: cycle.id }).update({ journal_voucher_counter: "9007199254740992" });
-        const concurrent = await Promise.all([post(), postContribution(), postContribution()]);
+        const concurrent = await Promise.all([post(), postContribution(), postPenalty(), postPenalty()]);
         assert.ok(concurrent.every(result => result.status === 201));
         const numbers = concurrent.map(result => result.body.transaction.document_number).sort();
-        assert.deepEqual(numbers, ["9007199254740993", "9007199254740994", "9007199254740995"]);
-        assert.equal(await journalCounter(), "9007199254740995");
+        assert.deepEqual(numbers, ["9007199254740993", "9007199254740994", "9007199254740995", "9007199254740996"]);
+        assert.equal(await journalCounter(), "9007199254740996");
         const persistedVouchers = await db("transactions")
           .whereIn("id", concurrent.map(result => result.body.transaction.id))
           .orderBy("document_number").pluck("document_number");
@@ -2611,6 +2626,9 @@ test(
 
         await db("cycles").where({ id: cycle.id }).update({ journal_voucher_counter: "9223372036854775807" });
         const beforeOverflow = await counts();
+        assert.equal((await postPenalty()).status, 409);
+        assert.equal(await journalCounter(), "9223372036854775807");
+        assert.deepEqual(await counts(), beforeOverflow);
         assert.equal((await postContribution()).status, 409);
         assert.equal(await journalCounter(), "9223372036854775807");
         assert.deepEqual(await counts(), beforeOverflow);
@@ -2620,6 +2638,7 @@ test(
         await db("users").where({ id: actor.id }).update({ role: "AUDITOR" });
         assert.equal((await post()).status, 403);
         assert.equal((await postContribution()).status, 403);
+        assert.equal((await postPenalty()).status, 403);
         assert.equal(await journalCounter(), "9223372036854775807");
       },
     );
@@ -2919,6 +2938,13 @@ test(
         const result = await post();
         assert.equal(result.status, 201);
         assert.equal(result.body.transaction.type, "PENALTY");
+        assert.equal(result.body.transaction.document_type, "JOURNAL_VOUCHER");
+        assert.equal(result.body.transaction.document_number, "1");
+        const savedVoucher = await db("transactions").where({ id: result.body.transaction.id }).first();
+        assert.equal(savedVoucher.document_number, "1");
+        assert.equal(savedVoucher.document_type, "JOURNAL_VOUCHER");
+        const journalCounter = async () => (await db("cycles").where({ id: cycle.id }).first("journal_voucher_counter")).journal_voucher_counter;
+        assert.equal(await journalCounter(), "1");
         assert.equal(result.body.transaction.amount, "20.50");
         assert.equal(result.body.transaction.user_id, null);
         assert.equal(result.body.transaction.cycle_id, cycle.id);
@@ -2988,6 +3014,7 @@ test(
             ),
           );
           assert.deepEqual(after, before);
+          assert.equal(await journalCounter(), "1");
         } finally {
           await db.raw(
             "DROP TRIGGER test_penalty_failure ON public.account_entries; DROP FUNCTION public.reject_test_penalty_credit()",
