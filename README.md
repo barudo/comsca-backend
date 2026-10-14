@@ -537,6 +537,15 @@ liability credit. In this ledger, debit/credit sides are `account_entries`, not
 separate business components. Cash is unchanged; payment is a later operation.
 All writes commit atomically. A failure rolls back the entire expense.
 
+Migration `034_add_expense_payment_status.js` adds nullable
+`transactions.expense_payment_status`. Existing expenses retain `NULL` until
+reconciled. On insertion, an `EXPENSE` with an omitted or null status receives
+`UNPAID`; explicit `PAID` is also allowed. Non-expense transactions must retain
+`NULL`, and other non-null values are rejected. Updating an existing expense's
+other fields does not change its payment status. This migration does not add a
+payment endpoint or include the new column in API responses. Rolling it back
+removes the recorded payment statuses.
+
 Returns HTTP 201 with `{success:true,transaction,entries,account_entries}`.
 `transaction` is the saved header; `entries` contains its business component;
 `account_entries` contains both saved postings referencing that component.
