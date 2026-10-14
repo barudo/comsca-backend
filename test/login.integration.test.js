@@ -2487,6 +2487,10 @@ test(
         const charged = await post();
         assert.equal(charged.status, 201);
         assert.equal(charged.body.transaction.type, "LOAN_INTEREST");
+        assert.equal(charged.body.transaction.document_type, "JOURNAL_VOUCHER");
+        assert.equal(charged.body.transaction.document_number, "1");
+        const journalCounter = async () => (await db("cycles").where({ id: cycle.id }).first("journal_voucher_counter")).journal_voucher_counter;
+        assert.equal(await journalCounter(), "1");
         assert.equal(charged.body.transaction.amount, "24.53");
         assert.equal(charged.body.transaction.cycle_id, cycle.id);
         assert.equal(charged.body.transaction.user_id, null);
@@ -2501,6 +2505,8 @@ test(
           .where({ id: charged.body.transaction.id })
           .first();
         assert.equal(saved.amount, "24.53");
+        assert.equal(saved.document_type, "JOURNAL_VOUCHER");
+        assert.equal(saved.document_number, "1");
         const savedEntries = await db("transaction_entries")
           .where({ transaction_id: saved.id })
           .orderBy("user_id");
@@ -2522,7 +2528,10 @@ test(
             ],
           );
         }
-        assert.equal((await post()).status, 201); // Repeated requests charge a new full period.
+        const repeated = await post(); // Repeated requests charge a new full period.
+        assert.equal(repeated.status, 201);
+        assert.equal(repeated.body.transaction.document_number, "2");
+        assert.equal(await journalCounter(), "2");
         const foreignAccount = await db("accounts")
           .whereNot({ group_id: group.id })
           .first("id");
@@ -2557,6 +2566,7 @@ test(
             /Test interest posting rejection/,
           );
           assert.deepEqual(await counts(), before);
+          assert.equal(await journalCounter(), "2");
           await db.raw(`DROP TRIGGER test_interest_credit_failure ON public.account_entries;
         CREATE CONSTRAINT TRIGGER test_interest_credit_failure AFTER INSERT ON public.account_entries
         DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.reject_test_interest_credit();`);
@@ -2567,11 +2577,28 @@ test(
             /Test interest posting rejection/,
           );
           assert.deepEqual(await counts(), before);
+          assert.equal(await journalCounter(), "2");
         } finally {
           await db.raw(
             "DROP TRIGGER test_interest_credit_failure ON public.account_entries; DROP FUNCTION public.reject_test_interest_credit()",
           );
         }
+        await db("cycles").where({ id: cycle.id }).update({ journal_voucher_counter: "9007199254740992" });
+        const concurrent = await Promise.all([post(), post()]);
+        assert.ok(concurrent.every(result => result.status === 201));
+        const numbers = concurrent.map(result => result.body.transaction.document_number).sort();
+        assert.deepEqual(numbers, ["9007199254740993", "9007199254740994"]);
+        assert.equal(await journalCounter(), "9007199254740994");
+        const persistedVouchers = await db("transactions")
+          .whereIn("id", concurrent.map(result => result.body.transaction.id))
+          .orderBy("document_number").pluck("document_number");
+        assert.deepEqual(persistedVouchers, numbers);
+
+        await db("cycles").where({ id: cycle.id }).update({ journal_voucher_counter: "9223372036854775807" });
+        const beforeOverflow = await counts();
+        assert.equal((await post()).status, 409);
+        assert.equal(await journalCounter(), "9223372036854775807");
+        assert.deepEqual(await counts(), beforeOverflow);
         await db("users").where({ id: actor.id }).update({ role: "AUDITOR" });
         assert.equal((await post()).status, 403);
       },

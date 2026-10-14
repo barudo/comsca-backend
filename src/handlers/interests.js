@@ -6,6 +6,8 @@ const transactionColumns = [
   "type",
   "amount",
   "description",
+  "document_type",
+  "document_number",
   "occurred_at",
   "created_at",
   "updated_at",
@@ -214,12 +216,18 @@ class InterestsHandler {
           }
 
           const amount = decimal(totalCents);
+          const [voucher] = await trx("cycles")
+            .where({ id: cycle.id, group_id })
+            .increment("journal_voucher_counter", 1)
+            .returning("journal_voucher_counter");
           const [header] = await trx("transactions")
             .insert({
               group_id,
               cycle_id: cycle.id,
               user_id: null,
               type: "LOAN_INTEREST",
+              document_type: "JOURNAL_VOUCHER",
+              document_number: voucher.journal_voucher_counter,
               amount,
             })
             .returning("id");

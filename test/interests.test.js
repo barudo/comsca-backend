@@ -9,6 +9,7 @@ function fixture(t) {
   t.after(() => db.destroy());
   const state = {
     role: "OWNER",
+    voucherCounter: "0",
     cycle: {
       id: "20",
       interest_rate: "2.500000",
@@ -31,12 +32,14 @@ function fixture(t) {
   Object.defineProperty(db, "transaction", {
     value: async (fn) => {
       const before = state.writes.length;
+      const counterBefore = state.voucherCounter;
       try {
         const result = await fn(db);
         if (state.commitError) throw state.commitError;
         return result;
       } catch (error) {
         state.writes.length = before;
+        state.voucherCounter = counterBefore;
         throw error;
       }
     },
@@ -83,6 +86,15 @@ function fixture(t) {
           });
         }
         return { rows };
+      }
+      if (query.method === "update" && builder._single.table === "cycles") {
+        assert.match(query.sql, /"journal_voucher_counter" = "journal_voucher_counter" \+ \?/);
+        assert.deepEqual(query.bindings, [1, "20", "1"]);
+        if (state.voucherCounter === "9223372036854775807") {
+          throw Object.assign(new Error("bigint out of range"), { code: "22003" });
+        }
+        state.voucherCounter = String(BigInt(state.voucherCounter) + 1n);
+        return [{ journal_voucher_counter: state.voucherCounter }];
       }
       if (query.method === "insert") {
         if (
@@ -215,13 +227,16 @@ test("interest charge returns 409 without writes for missing terms or no positiv
   state.cycle.interest_rate = null;
   assert.equal((await post()).status, 409);
   assert.equal(state.writes.length, 0);
+  assert.equal(state.voucherCounter, "0");
   state.cycle.interest_rate = "2.500000";
   state.events = [event("11", "LOAN_DISBURSED", "0.01", 1)];
   assert.equal((await post()).status, 409);
   assert.equal(state.writes.length, 0);
+  assert.equal(state.voucherCounter, "0");
   state.events = [];
   assert.equal((await post()).status, 409);
   assert.equal(state.writes.length, 0);
+  assert.equal(state.voucherCounter, "0");
 });
 
 test("interest charge validates group-scoped accounts, authorization and input before writes", async (t) => {
@@ -249,6 +264,7 @@ test("interest charge validates group-scoped accounts, authorization and input b
   state.role = "AUDITOR";
   assert.equal((await post()).status, 403);
   assert.equal(state.writes.length, 0);
+  assert.equal(state.voucherCounter, "0");
 });
 
 test("interest charge rolls back account, commit and unexpected failures", async (t) => {
@@ -260,12 +276,60 @@ test("interest charge rolls back account, commit and unexpected failures", async
   };
   assert.equal((await post()).status, 409);
   assert.equal(state.writes.length, 0);
+  assert.equal(state.voucherCounter, "0");
   state.writeError = null;
   state.commitError = Object.assign(new Error("private"), { code: "40001" });
   assert.equal((await post()).status, 409);
   assert.equal(state.writes.length, 0);
+  assert.equal(state.voucherCounter, "0");
   state.commitError = new Error("private");
   const unexpected = await post();
   assert.equal(unexpected.status, 500);
   assert.equal(state.writes.length, 0);
+  assert.equal(state.voucherCounter, "0");
+});
+
+test("interest journal vouchers increment once for multiple borrowers and preserve bigint precision", async t => {
+  const { state, post } = fixture(t);
+  state.events = [
+    event("11", "LOAN_DISBURSED", "100.00", 1),
+    event("12", "LOAN_DISBURSED", "200.00", 2),
+  ];
+  const first = await post();
+  assert.equal(first.status, 201);
+  assert.equal(first.body.transaction.document_type, "JOURNAL_VOUCHER");
+  assert.equal(first.body.transaction.document_number, "1");
+  assert.equal(first.body.entries.length, 2);
+  assert.equal(state.voucherCounter, "1");
+  assert.match(state.queries.find(q => q.sql.includes('from "transactions"')).sql, /"document_type", "document_number"/);
+  state.voucherCounter = "9007199254740992";
+  assert.equal((await post()).body.transaction.document_number, "9007199254740993");
+  for (const table of ["transactions", "transaction_entries", "account_entries"]) {
+    state.writeError = { table, error: Object.assign(new Error("failed"), { code: "23514" }) };
+    assert.equal((await post()).status, 409);
+    assert.equal(state.voucherCounter, "9007199254740993");
+  }
+  state.writeError = null;
+  assert.equal((await post()).body.transaction.document_number, "9007199254740994");
+});
+
+test("interest voucher numbers cannot be supplied by the caller", async t => {
+  const { state, post } = fixture(t);
+  state.events = [event("11", "LOAN_DISBURSED", "100.00", 1)];
+  for (const extra of [{ document_number: "10" }, { document_type: "RECEIPT" }, { journal_voucher_counter: "10" }]) {
+    assert.equal((await post({ debit: "101", credit: "102", ...extra })).status, 400);
+  }
+  assert.equal(state.voucherCounter, "0");
+  assert.equal(state.writes.length, 0);
+});
+
+test("interest voucher counter overflow rolls back without accounting writes", async t => {
+  const { state, post } = fixture(t);
+  state.events = [event("11", "LOAN_DISBURSED", "100.00", 1)];
+  state.voucherCounter = "9223372036854775807";
+  const result = await post();
+  assert.equal(result.status, 409);
+  assert.equal(state.voucherCounter, "9223372036854775807");
+  assert.equal(state.writes.length, 0);
+  assert.doesNotMatch(result.body.error, /bigint out of range/);
 });

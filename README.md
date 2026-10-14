@@ -631,6 +631,10 @@ rounded member entries.
 Returns HTTP 201 with `{success:true,transaction,entries,account_entries}` after
 atomically writing one `LOAN_INTEREST` header, one positive member entry per
 borrower with chargeable rounded interest, and balanced debit/credit postings.
+Each successful charge increments the cycle's `journal_voucher_counter` once,
+regardless of borrower count. The transaction stores and returns that number as
+`document_number` with `document_type: "JOURNAL_VOUCHER"`. The counter update
+commits with the accounting records; rejected or failed charges consume no number.
 Every successful request charges another full period; there is no elapsed-time
 check or duplicate suppression. Missing interest terms, no positive outstanding
 loan, or interest that rounds to zero returns 409 without writes. Invalid input
