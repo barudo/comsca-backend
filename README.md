@@ -370,9 +370,9 @@ any previous value. A member without loan applications can still receive a loan.
 ```
 
 Use actual account IDs from `GET /api/v1/cycles/accounts`. `debit` must be Loans
-Receivable (code `1100`, ASSET); `credit` must be Cash (code `1000`, ASSET).
-The selected Cash account must have a ledger balance at least equal to the
-disbursement amount. Insufficient cash returns 409 without allocating a voucher
+Receivable (code `1100`, ASSET); `credit` selects a distinct ASSET funding account.
+That selected account must have a ledger balance at least equal to the
+disbursement amount. Insufficient funds return 409 without allocating a voucher
 or changing accounting records or loan applications. The balance uses the sum
 of signed postings for that account and group, matching the accounting ledger. `user_id`, `debit`, `credit`, and
 `amount` are required. The backend selects the current active or distributing

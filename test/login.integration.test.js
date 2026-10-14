@@ -2156,17 +2156,17 @@ test(
             body: JSON.parse(response.body),
           };
         };
-        const fundCash = async amount => db.transaction(async trx => {
+        const fundAsset = async (amount, accountId = cash.id) => db.transaction(async trx => {
           const equity = accounts.find(account => account.type === "EQUITY");
           const [funding] = await trx("transactions").insert({
             group_id: group.id, cycle_id: cycle.id, type: "EQUITY", amount,
           }).returning("id");
           const [entry] = await trx("transaction_entries").insert({
             group_id: group.id, transaction_id: funding.id, type: "EQUITY",
-            debit: cash.id, credit: equity.id, amount,
+            debit: accountId, credit: equity.id, amount,
           }).returning("id");
           await trx("account_entries").insert([
-            { group_id: group.id, transaction_entry_id: entry.id, account_id: cash.id, amount },
+            { group_id: group.id, transaction_entry_id: entry.id, account_id: accountId, amount },
             { group_id: group.id, transaction_entry_id: entry.id, account_id: equity.id, amount: "-" + amount },
           ]);
         });
@@ -2181,11 +2181,11 @@ test(
         });
         const beforeRejection = await snapshot();
         const nonCash = accounts.find(account => account.code === "1300");
-        assert.equal((await post({ ...input, credit: nonCash.id })).status, 400);
+        assert.equal((await post({ ...input, credit: nonCash.id })).status, 409);
         assert.deepEqual(await snapshot(), beforeRejection);
         assert.equal((await post()).status, 409);
         assert.deepEqual(await snapshot(), beforeRejection);
-        await fundCash("1.00");
+        await fundAsset("1.00");
         const competing = await Promise.all([
           post({ ...input, amount: "0.75" }),
           post({ ...input, amount: "0.75" }),
@@ -2198,8 +2198,27 @@ test(
         assert.equal(application.amount_disbursed, "0.75");
         const balance = await db("account_entries").where({ group_id: group.id, account_id: cash.id }).sum("amount as amount").first();
         assert.equal(balance.amount, "0.25");
-        await fundCash("9999999999999999.99");
-        await fundCash("9999999999999999.99");
+        await fundAsset("1.00", nonCash.id);
+        const nonCashResult = await post({ ...input, credit: nonCash.id, amount: "1.00" });
+        assert.equal(nonCashResult.status, 201);
+        const nonCashEntry = await db("transaction_entries").where({ transaction_id: nonCashResult.body.transaction.id }).first();
+        assert.equal(nonCashEntry.credit, nonCash.id);
+        const nonCashPostings = await db("account_entries").where({ transaction_entry_id: nonCashEntry.id }).orderBy("amount");
+        assert.deepEqual(nonCashPostings.map(row => [row.account_id, row.amount]), [[nonCash.id, "-1.00"], [loans.id, "1.00"]]);
+        const assetBalance = async accountId => (await db("account_entries").where({ group_id: group.id, account_id: accountId }).sum("amount as amount").first()).amount;
+        assert.equal(await assetBalance(nonCash.id), "0.00");
+        assert.equal(await assetBalance(cash.id), balance.amount);
+        assert.equal((await post({ ...input, credit: nonCash.id, amount: "0.01" })).status, 409);
+        await fundAsset("1.00", nonCash.id);
+        const competingAssets = await Promise.all([
+          post({ ...input, credit: nonCash.id, amount: "0.75" }),
+          post({ ...input, credit: nonCash.id, amount: "0.75" }),
+        ]);
+        assert.deepEqual(competingAssets.map(result => result.status).sort(), [201, 409]);
+        assert.equal(await assetBalance(nonCash.id), "0.25");
+        assert.equal(await assetBalance(cash.id), balance.amount);
+        await fundAsset("9999999999999999.99");
+        await fundAsset("9999999999999999.99");
         const result = await post();
         assert.equal(result.status, 201);
         const header = result.body.transaction;

@@ -12,7 +12,7 @@ function fixture(t) {
     cycle: true,
     cycleStatus: "active",
     voucherCounter: "0",
-    cashBalance: "9999999999999999.99",
+    fundingBalances: { "101": "9999999999999999.99", "107": "0.00" },
     member: true,
     membership: true,
     error: null,
@@ -58,10 +58,11 @@ function fixture(t) {
       const q = builder.toSQL();
       state.queries.push(q);
       if (q.sql.includes("AS sufficient")) {
-        assert.deepEqual(q.bindings.slice(1), ["1", "101"]);
+        assert.equal(q.bindings[1], "1");
+        assert.ok(Object.hasOwn(state.fundingBalances, q.bindings[2]));
         assert.match(q.sql, /FROM account_entries WHERE group_id = \? AND account_id = \?/);
         assert.ok(state.queries.some(query => query.sql.includes('from "cycles"') && query.sql.includes("for update")));
-        return { rows: [{ sufficient: BigInt(state.cashBalance.replace(".", "")) >= BigInt(q.bindings[0].replace(".", "")) }] };
+        return { rows: [{ sufficient: BigInt(state.fundingBalances[q.bindings[2]].replace(".", "")) >= BigInt(q.bindings[0].replace(".", "")) }] };
       }
       if (q.sql.includes('from "groups"'))
         return q.bindings[0] === "alpha"
@@ -320,7 +321,6 @@ test("loan disbursements POST requires loans receivable debit and a distinct ass
     { debit: "106" },
     { credit: "106" },
     { credit: "108" },
-    { credit: "107" },
     { credit: "102" },
   ]) {
     assert.equal((await post({ ...input, ...changes })).status, 400);
@@ -460,22 +460,41 @@ test("disbursement succeeds with only unrelated loan applications", async t => {
   assert.deepEqual(state.applications, original);
 });
 
-test("disbursement requires sufficient cash and permits exact available balance", async t => {
+test("disbursement requires sufficient funding and permits exact available balance", async t => {
   const { state, post } = fixture(t);
   const original = [{ group_id: "1", user_id: "11", status: "active", amount_disbursed: "0.00" }];
   state.applications = structuredClone(original);
   for (const balance of ["0.00", "-1.00", "499.99"]) {
-    state.cashBalance = balance;
+    state.fundingBalances["101"] = balance;
     const result = await post(input);
     assert.equal(result.status, 409);
-    assert.match(result.body.error, /Insufficient cash/);
+    assert.match(result.body.error, /Insufficient balance/);
     assert.equal(state.writes.length, 0);
     assert.equal(state.voucherCounter, "0");
     assert.deepEqual(state.applications, original);
   }
-  state.cashBalance = "500.00";
+  state.fundingBalances["101"] = "500.00";
   assert.equal((await post(input)).status, 201);
-  state.cashBalance = "9007199254740993.01";
+  state.fundingBalances["101"] = "9007199254740993.01";
   assert.equal((await post({ ...input, amount: "9007199254740993.02" })).status, 409);
   assert.equal((await post({ ...input, amount: "9007199254740993.01" })).status, 201);
+});
+
+test("disbursement checks the selected credit asset independently of Cash", async t => {
+  const { state, post } = fixture(t);
+  state.fundingBalances["101"] = "1000.00";
+  state.fundingBalances["107"] = "499.99";
+  assert.equal((await post({ ...input, credit: "107" })).status, 409);
+  assert.equal(state.writes.length, 0);
+  assert.equal(state.voucherCounter, "0");
+  state.fundingBalances["101"] = "0.00";
+  state.fundingBalances["107"] = "500.00";
+  for (const code of ["1300", "CUSTOM_ASSET"]) {
+    state.accounts.find(account => account.id === "107").code = code;
+    const result = await post({ ...input, credit: "107" });
+    assert.equal(result.status, 201);
+    assert.equal(result.body.entries[0].credit, "107");
+    assert.equal(result.body.account_entries[1].account_id, "107");
+    assert.equal(result.body.account_entries[1].amount, "-500.00");
+  }
 });
