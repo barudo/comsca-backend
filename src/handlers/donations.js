@@ -5,6 +5,7 @@ class DonationsHandler extends GroupAccountTransactionsHandler {
     super({
       type: "DONATION",
       label: "donation",
+      journalVoucher: true,
       extraFields: ["date", "remarks"],
       requireDescription: false,
       validateAccounts(debit, credit, fail) {

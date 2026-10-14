@@ -156,6 +156,15 @@ class GroupAccountTransactionsHandler {
           }
           this.rules.validateAccounts(debit, credit, fail);
 
+          const document = {};
+          if (this.rules.journalVoucher) {
+            const [voucher] = await trx("cycles")
+              .where({ id: cycle.id, group_id })
+              .increment("journal_voucher_counter", 1)
+              .returning("journal_voucher_counter");
+            document.document_type = "JOURNAL_VOUCHER";
+            document.document_number = voucher.journal_voucher_counter;
+          }
           const [header] = await trx("transactions")
             .insert({
               group_id,
@@ -164,6 +173,7 @@ class GroupAccountTransactionsHandler {
               type: this.rules.type,
               amount: input.amount,
               description: input.description,
+              ...document,
             })
             .returning("id");
           const [component] = await trx("transaction_entries")
@@ -195,7 +205,9 @@ class GroupAccountTransactionsHandler {
             .returning("*");
           const transaction = await trx("transactions")
             .where({ id: header.id, group_id })
-            .first(transactionColumns);
+            .first(this.rules.journalVoucher
+              ? [...transactionColumns, "document_type", "document_number"]
+              : transactionColumns);
           return { transaction, entries: [component], account_entries };
         },
       );
@@ -207,7 +219,7 @@ class GroupAccountTransactionsHandler {
           .json({ success: false, error: error.message });
       }
       if (
-        ["23001", "23503", "23505", "23514", "40001", "40P01"].includes(
+        ["22003", "23001", "23503", "23505", "23514", "40001", "40P01"].includes(
           error.code,
         )
       ) {

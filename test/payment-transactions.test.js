@@ -18,13 +18,14 @@ function fixture(t) {
       { id: "111", cycle_id: "20", type: "INCOME", code: "4300" },
       { id: "120", cycle_id: "20", type: "EXPENSE", code: "5000" },
       { id: "121", cycle_id: "20", type: "LIABILITY", code: "2000" }],
-    receiptCounter: "0", writes: [], queries: [] };
+    journalCounter: "0", receiptCounter: "0", writes: [], queries: [] };
   let header;
   Object.defineProperty(db, "transaction", { value: async fn => {
     const before = state.writes.length;
     const counterBefore = state.receiptCounter;
+    const journalBefore = state.journalCounter;
     try { const result = await fn(db); if (state.error) throw state.error; return result; }
-    catch (error) { state.writes.length = before; state.receiptCounter = counterBefore; throw error; }
+    catch (error) { state.writes.length = before; state.receiptCounter = counterBefore; state.journalCounter = journalBefore; throw error; }
   } });
   db.client.runner = builder => ({ run: async () => {
     const q = builder.toSQL(); state.queries.push(q);
@@ -41,6 +42,14 @@ function fixture(t) {
       return state.accounts.filter(account => (account.group_id ?? "1") === q.bindings[0] && q.bindings.slice(1).includes(account.id));
     }
     if (q.method === "update" && builder._single.table === "cycles") {
+      if (q.sql.includes('"journal_voucher_counter"')) {
+        assert.match(q.sql, /"journal_voucher_counter" = "journal_voucher_counter" \+ \?/);
+        assert.deepEqual(q.bindings, [1, "20", "1"]);
+        assert.ok(state.queries.some(query => query.sql.includes('from "cycles"') && query.sql.includes("for update")));
+        if (state.journalCounter === "9223372036854775807") throw Object.assign(new Error("overflow"), { code: "22003" });
+        state.journalCounter = String(BigInt(state.journalCounter) + 1n);
+        return [{ journal_voucher_counter: state.journalCounter }];
+      }
       assert.match(q.sql, /"receipt_counter" = "receipt_counter" \+ \?/);
       assert.deepEqual(q.bindings, [1, "20", "1"]);
       state.receiptCounter = String(BigInt(state.receiptCounter) + 1n);
@@ -531,4 +540,59 @@ test("payments require the group's active cycle before allocating receipts", asy
   assert.equal((await post({ ...input, document_number: 42 })).status, 400);
   assert.equal((await post({ ...input, document_type: "RECEIPT" })).status, 400);
   assert.equal(state.receiptCounter, "0");
+});
+
+test("donation journal vouchers increment once with bigint precision and roll back failures", async t => {
+  const { state, post } = fixture(t);
+  const path = "/api/v1/transactions/donations";
+  const body = { debit: "110", credit: "111", amount: "10.00" };
+  const send = changes => post({ ...body, ...changes }, {}, undefined, path);
+  assert.equal((await send()).body.transaction.document_number, "1");
+  state.journalCounter = "9007199254740992";
+  const result = await send();
+  assert.equal(result.status, 201);
+  assert.equal(result.body.transaction.document_type, "JOURNAL_VOUCHER");
+  assert.equal(result.body.transaction.document_number, "9007199254740993");
+  assert.match(state.queries.find(q => q.sql.includes('from "transactions"')).sql, /"document_type", "document_number"/);
+  assert.equal(state.receiptCounter, "0");
+  const before = state.writes.length;
+  state.writeError = Object.assign(new Error("private"), { code: "23514" });
+  for (const table of ["transactions", "transaction_entries", "account_entries"]) {
+    state.failTable = table;
+    assert.equal((await send()).status, 409);
+    assert.equal(state.journalCounter, "9007199254740993");
+    assert.equal(state.writes.length, before);
+  }
+  state.failTable = null;
+  state.error = Object.assign(new Error("private"), { code: "40001" });
+  assert.equal((await send()).status, 409);
+  assert.equal(state.journalCounter, "9007199254740993");
+  assert.equal(state.writes.length, before);
+  state.error = null;
+  assert.equal((await send()).body.transaction.document_number, "9007199254740994");
+  state.journalCounter = "9223372036854775807";
+  const overflow = await send();
+  assert.equal(overflow.status, 409);
+  assert.doesNotMatch(overflow.body.error, /overflow/);
+  assert.equal(state.journalCounter, "9223372036854775807");
+});
+
+test("rejected donations and expenses do not allocate journal vouchers", async t => {
+  const { state, post } = fixture(t);
+  const path = "/api/v1/transactions/donations";
+  const body = { debit: "110", credit: "111", amount: "10.00" };
+  for (const changes of [{ amount: 0 }, { document_number: 8 }, { document_type: "RECEIPT" }, { credit: "108" }]) {
+    assert.equal((await post({ ...body, ...changes }, {}, undefined, path)).status, 400);
+  }
+  state.role = "MEMBER";
+  assert.equal((await post(body, {}, undefined, path)).status, 403);
+  state.role = "OWNER";
+  state.cycle = false;
+  assert.equal((await post(body, {}, undefined, path)).status, 409);
+  assert.equal(state.journalCounter, "0");
+  assert.equal(state.writes.length, 0);
+  state.cycle = true;
+  assert.equal((await post(expense, {}, undefined, expensePath)).status, 201);
+  assert.equal(state.journalCounter, "0");
+  assert.ok(!state.queries.some(q => q.sql.startsWith('update "cycles"')));
 });

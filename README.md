@@ -541,6 +541,12 @@ are `"2000.00"` and `"-2000.00"`. Errors follow the other transaction endpoints:
 Each successful POST creates a new expense; automatic retry deduplication is
 not provided. No migration is required.
 
+Each successful donation allocates one number from the current cycle's
+`journal_voucher_counter`, sharing its sequence with other journal vouchers.
+The transaction stores and returns `document_type: "JOURNAL_VOUCHER"` and
+`document_number`. The counter and accounting writes commit together; rejected
+or failed donations consume no number.
+
 `POST /api/v1/transactions/donations` records a group donation in the current
 active or distributing cycle. Supply a Bearer token and `x-group-slug`; only an
 OWNER, ADMIN or TREASURER of that group can post.
