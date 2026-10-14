@@ -5,6 +5,7 @@ class ExpensesHandler extends GroupAccountTransactionsHandler {
     super({
       type: "EXPENSE",
       label: "expense",
+      journalVoucher: true,
       extraFields: [],
       requireDescription: true,
       validateAccounts(debit, credit, fail) {

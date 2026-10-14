@@ -503,6 +503,12 @@ Other input fields are rejected. Returns 201 with
 `{ "success": true, "loan_application": { ... } }`. No disbursement or ledger
 posting occurs. Apply migration `029_create_loan_applications.js` before use.
 
+Each successful expense increments the current cycle's `journal_voucher_counter`
+once and stores and returns `document_number` with
+`document_type: "JOURNAL_VOUCHER"`. It shares the cycle's journal voucher sequence
+with donations and other journal entries. Failed requests roll back the counter
+together with the accounting records.
+
 `POST /api/v1/transactions/add-expense` records an incurred, unpaid expense in
 the current active or distributing cycle. Supply a Bearer token and
 `x-group-slug`; only an OWNER, ADMIN or TREASURER in that group can post.

@@ -542,10 +542,11 @@ test("payments require the group's active cycle before allocating receipts", asy
   assert.equal(state.receiptCounter, "0");
 });
 
-test("donation journal vouchers increment once with bigint precision and roll back failures", async t => {
+for (const kind of ["donation", "expense"]) {
+test(kind + " journal vouchers increment once with bigint precision and roll back failures", async t => {
   const { state, post } = fixture(t);
-  const path = "/api/v1/transactions/donations";
-  const body = { debit: "110", credit: "111", amount: "10.00" };
+  const path = kind === "donation" ? "/api/v1/transactions/donations" : expensePath;
+  const body = kind === "donation" ? { debit: "110", credit: "111", amount: "10.00" } : expense;
   const send = changes => post({ ...body, ...changes }, {}, undefined, path);
   assert.equal((await send()).body.transaction.document_number, "1");
   state.journalCounter = "9007199254740992";
@@ -577,7 +578,9 @@ test("donation journal vouchers increment once with bigint precision and roll ba
   assert.equal(state.journalCounter, "9223372036854775807");
 });
 
-test("rejected donations and expenses do not allocate journal vouchers", async t => {
+}
+
+test("rejected donations do not allocate journal vouchers", async t => {
   const { state, post } = fixture(t);
   const path = "/api/v1/transactions/donations";
   const body = { debit: "110", credit: "111", amount: "10.00" };
@@ -591,8 +594,29 @@ test("rejected donations and expenses do not allocate journal vouchers", async t
   assert.equal((await post(body, {}, undefined, path)).status, 409);
   assert.equal(state.journalCounter, "0");
   assert.equal(state.writes.length, 0);
-  state.cycle = true;
-  assert.equal((await post(expense, {}, undefined, expensePath)).status, 201);
-  assert.equal(state.journalCounter, "0");
   assert.ok(!state.queries.some(q => q.sql.startsWith('update "cycles"')));
+});
+
+test("expenses share the donation journal sequence and reject supplied document fields", async t => {
+  const { state, post } = fixture(t);
+  for (const changes of [{ document_number: "9" }, { document_type: "RECEIPT" }, { journal_voucher_counter: "9" }, { description: "" }]) {
+    assert.equal((await post({ ...expense, ...changes }, {}, undefined, expensePath)).status, 400);
+  }
+  state.role = "MEMBER";
+  assert.equal((await post(expense, {}, undefined, expensePath)).status, 403);
+  state.role = "OWNER";
+  state.cycle = false;
+  assert.equal((await post(expense, {}, undefined, expensePath)).status, 409);
+  assert.equal(state.journalCounter, "0");
+  assert.equal(state.writes.length, 0);
+  state.cycle = true;
+  assert.equal((await post(expense, {}, undefined, expensePath)).body.transaction.document_number, "1");
+  const donation = await post({ debit: "110", credit: "111", amount: "10.00" }, {}, undefined, "/api/v1/transactions/donations");
+  assert.equal(donation.body.transaction.document_number, "2");
+  const result = await post(expense, {}, undefined, expensePath);
+  assert.equal(result.status, 201);
+  assert.equal(result.body.transaction.document_number, "3");
+  assert.equal(result.body.transaction.document_type, "JOURNAL_VOUCHER");
+  assert.equal(state.journalCounter, "3");
+  assert.equal(state.receiptCounter, "0");
 });
