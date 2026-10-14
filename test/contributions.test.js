@@ -7,7 +7,7 @@ const { createApp } = require("../src/app");
 function fixture(t) {
   const db = knex({ client: "pg" });
   t.after(() => db.destroy());
-  const state = { role: "OWNER", cycle: true, members: [{ user_id: "11" }, { user_id: "12" }, { user_id: "13" }], error: null,
+  const state = { role: "OWNER", voucherCounter: "0", cycle: true, members: [{ user_id: "11" }, { user_id: "12" }, { user_id: "13" }], error: null,
     accounts: [{ id: "101", cycle_id: "20", type: "ASSET", code: "1400" },
       { id: "102", cycle_id: "20", type: "INCOME", code: "4400" }],
     writes: [], queries: [] };
@@ -15,8 +15,9 @@ function fixture(t) {
   let nextId = 200;
   Object.defineProperty(db, "transaction", { value: async fn => {
     const before = state.writes.length;
+    const counterBefore = state.voucherCounter;
     try { const result = await fn(db); if (state.error) throw state.error; return result; }
-    catch (error) { state.writes.length = before; throw error; }
+    catch (error) { state.voucherCounter = counterBefore; state.writes.length = before; throw error; }
   } });
   db.client.runner = builder => ({ run: async () => {
     const q = builder.toSQL(); state.queries.push(q);
@@ -41,7 +42,15 @@ function fixture(t) {
       assert.match(q.sql, /inner join "users".*for share/);
       return state.members;
     }
+    if (q.method === "update" && builder._single.table === "cycles") {
+      assert.match(q.sql, /"journal_voucher_counter" = "journal_voucher_counter" \+ \?/);
+      assert.deepEqual(q.bindings, [1, "20", "1"]);
+      if (state.voucherCounter === "9223372036854775807") throw Object.assign(new Error("bigint overflow"), { code: "22003" });
+      state.voucherCounter = String(BigInt(state.voucherCounter) + 1n);
+      return [{ journal_voucher_counter: state.voucherCounter }];
+    }
     if (q.method === "insert") {
+      if (state.failTable === builder._single.table) throw Object.assign(new Error("write failed"), { code: "23514" });
       if (builder._single.table === "account_entries" && state.failLaterBatch &&
           state.writes.some(write => write.table === "account_entries")) {
         throw Object.assign(new Error("Later posting batch failed"), { code: "23514" });
@@ -106,12 +115,13 @@ test("charge validates input before writes", async t => {
     for (const field of ["debit", "credit"]) assert.equal((await post({ ...input, [field]: id })).status, 400);
   }
   for (const body of [null, [], {}, { ...input, debit: "102" },
-    ...["group_id", "cycle_id", "user_id", "type", "entries"].map(field => ({ ...input, [field]: "1" })),
+    ...["group_id", "cycle_id", "user_id", "type", "entries", "document_type", "document_number", "journal_voucher_counter"].map(field => ({ ...input, [field]: "1" })),
     ...["\u0000", "x".repeat(4001), 1, {}].map(description => ({ ...input, description }))]) {
     assert.equal((await post(body)).status, 400, JSON.stringify(body));
   }
   assert.equal((await post(input, {}, '{"amount":')).status, 400);
   assert.equal(state.writes.length, 0);
+  assert.equal(state.voucherCounter, "0");
 });
 
 test("charge requires authentication and a financial role in the header group", async t => {
@@ -124,6 +134,7 @@ test("charge requires authentication and a financial role in the header group", 
     assert.equal((await post(input)).status, 403);
   }
   assert.equal(state.writes.length, 0);
+  assert.equal(state.voucherCounter, "0");
 });
 
 test("charge rejects missing roster, missing accounts and wrong account scope or chart", async t => {
@@ -143,12 +154,14 @@ test("charge rejects missing roster, missing accounts and wrong account scope or
     }
   }
   assert.equal(state.writes.length, 0);
+  assert.equal(state.voucherCounter, "0");
 });
 
 test("charge computes exact cents and rejects aggregate overflow", async t => {
   const { state, post } = fixture(t);
   assert.equal((await post({ ...input, amount: "9999999999999999.99" })).status, 400);
   assert.equal(state.writes.length, 0);
+  assert.equal(state.voucherCounter, "0");
   const maximum = await post({ ...input, amount: "3333333333333333.33" });
   assert.equal(maximum.status, 201);
   assert.equal(maximum.body.transaction.amount, "9999999999999999.99");
@@ -163,11 +176,13 @@ test("charge rolls back commit conflicts and hides unexpected errors", async t =
     const result = await post(input);
     assert.equal(result.status, 409);
     assert.equal(state.writes.length, 0);
+  assert.equal(state.voucherCounter, "0");
     assert.doesNotMatch(result.body.error, /private/);
   }
   state.error = new Error("private details");
   assert.equal((await post(input)).status, 500);
   assert.equal(state.writes.length, 0);
+  assert.equal(state.voucherCounter, "0");
 });
 
 test("charge batches 1001 unique members and rolls back a later posting failure", async t => {
@@ -181,6 +196,8 @@ test("charge batches 1001 unique members and rolls back a later posting failure"
       assert.equal(entry.credit, postings.find(posting => Number(posting.amount) < 0).account_id);
     }
   assert.equal(result.body.transaction.amount, "25525.50");
+  assert.equal(result.body.transaction.document_number, "1");
+  assert.equal(state.voucherCounter, "1");
   assert.deepEqual(result.body.entries.map(entry => entry.user_id), state.members.map(member => member.user_id));
   assert.equal(new Set(result.body.entries.map(entry => entry.id)).size, 1001);
   assert.equal(new Set(result.body.account_entries.map(posting => posting.id)).size, 2002);
@@ -194,4 +211,37 @@ test("charge batches 1001 unique members and rolls back a later posting failure"
   state.failLaterBatch = true;
   assert.equal((await post(input)).status, 409);
   assert.equal(state.writes.length, 0);
+  assert.equal(state.voucherCounter, "1");
+});
+
+test("contribution vouchers allocate once, preserve bigint precision and roll back write failures", async t => {
+  const { state, post } = fixture(t);
+  const first = await post(input);
+  assert.equal(first.status, 201);
+  assert.equal(first.body.transaction.document_type, "JOURNAL_VOUCHER");
+  assert.equal(first.body.transaction.document_number, "1");
+  assert.equal(first.body.entries.length, 3);
+  assert.equal(state.voucherCounter, "1");
+  assert.match(state.queries.find(q => q.sql.includes('from "transactions"')).sql, /"document_type", "document_number"/);
+  state.voucherCounter = "9007199254740992";
+  assert.equal((await post(input)).body.transaction.document_number, "9007199254740993");
+  const writesBefore = state.writes.length;
+  for (const table of ["transactions", "transaction_entries", "account_entries"]) {
+    state.failTable = table;
+    assert.equal((await post(input)).status, 409);
+    assert.equal(state.voucherCounter, "9007199254740993");
+    assert.equal(state.writes.length, writesBefore);
+  }
+  state.failTable = null;
+  assert.equal((await post(input)).body.transaction.document_number, "9007199254740994");
+});
+
+test("contribution voucher overflow preserves the counter without accounting writes", async t => {
+  const { state, post } = fixture(t);
+  state.voucherCounter = "9223372036854775807";
+  const result = await post(input);
+  assert.equal(result.status, 409);
+  assert.equal(state.voucherCounter, "9223372036854775807");
+  assert.equal(state.writes.length, 0);
+  assert.doesNotMatch(result.body.error, /bigint overflow/);
 });

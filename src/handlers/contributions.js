@@ -1,5 +1,5 @@
 const transactionColumns = ["id", "group_id", "cycle_id", "user_id", "type", "amount",
-  "description", "occurred_at", "created_at", "updated_at"];
+  "description", "document_type", "document_number", "occurred_at", "created_at", "updated_at"];
 
 function fail(message, status = 400) {
   throw Object.assign(new Error(message), { status });
@@ -77,8 +77,11 @@ class ContributionsHandler {
         }
         if (debit.type !== "ASSET" || debit.code !== "1400") fail("Debit must be Contributions Receivable (1400), an ASSET account");
         if (credit.type !== "INCOME" || credit.code !== "4400") fail("Credit must be Contribution Income (4400), an INCOME account");
+        const [voucher] = await trx("cycles").where({ id: cycle.id, group_id })
+          .increment("journal_voucher_counter", 1).returning("journal_voucher_counter");
         const [header] = await trx("transactions").insert({ group_id, cycle_id: cycle.id, user_id: null,
-          type: "CONTRIBUTION", amount, description: input.description }).returning("id");
+          type: "CONTRIBUTION", document_type: "JOURNAL_VOUCHER",
+          document_number: voucher.journal_voucher_counter, amount, description: input.description }).returning("id");
         const entries = [];
         const account_entries = [];
         // Bound each statement's parameter count for large cycle rosters.
@@ -100,7 +103,7 @@ class ContributionsHandler {
       return response.status(201).json({ success: true, ...result });
     } catch (error) {
       if ([400, 403, 404, 409].includes(error.status)) return response.status(error.status).json({ success: false, error: error.message });
-      if (["23001", "23503", "23505", "23514", "40001", "40P01"].includes(error.code)) {
+      if (["22003", "23001", "23503", "23505", "23514", "40001", "40P01"].includes(error.code)) {
         return response.status(409).json({ success: false, error: "Contributions could not be committed; refresh the selected records and retry" });
       }
       return next(error);

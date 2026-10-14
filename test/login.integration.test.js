@@ -2583,12 +2583,27 @@ test(
             "DROP TRIGGER test_interest_credit_failure ON public.account_entries; DROP FUNCTION public.reject_test_interest_credit()",
           );
         }
+        const contributionBody = {
+          debit: accounts.find(account => account.code === "1400").id,
+          credit: accounts.find(account => account.code === "4400").id,
+          amount: "1.00",
+        };
+        const postContribution = async (body = contributionBody) => {
+          const response = await handler({ ...event(body), rawPath: "/api/v1/contributions/charge" }, {});
+          return { status: response.statusCode, body: JSON.parse(response.body) };
+        };
+        const contribution = await postContribution();
+        assert.equal(contribution.status, 201);
+        assert.equal(contribution.body.transaction.document_number, "3");
+        assert.equal((await post()).body.transaction.document_number, "4");
+        assert.equal((await postContribution({ ...contributionBody, amount: "0" })).status, 400);
+        assert.equal(await journalCounter(), "4");
         await db("cycles").where({ id: cycle.id }).update({ journal_voucher_counter: "9007199254740992" });
-        const concurrent = await Promise.all([post(), post()]);
+        const concurrent = await Promise.all([post(), postContribution(), postContribution()]);
         assert.ok(concurrent.every(result => result.status === 201));
         const numbers = concurrent.map(result => result.body.transaction.document_number).sort();
-        assert.deepEqual(numbers, ["9007199254740993", "9007199254740994"]);
-        assert.equal(await journalCounter(), "9007199254740994");
+        assert.deepEqual(numbers, ["9007199254740993", "9007199254740994", "9007199254740995"]);
+        assert.equal(await journalCounter(), "9007199254740995");
         const persistedVouchers = await db("transactions")
           .whereIn("id", concurrent.map(result => result.body.transaction.id))
           .orderBy("document_number").pluck("document_number");
@@ -2596,11 +2611,16 @@ test(
 
         await db("cycles").where({ id: cycle.id }).update({ journal_voucher_counter: "9223372036854775807" });
         const beforeOverflow = await counts();
+        assert.equal((await postContribution()).status, 409);
+        assert.equal(await journalCounter(), "9223372036854775807");
+        assert.deepEqual(await counts(), beforeOverflow);
         assert.equal((await post()).status, 409);
         assert.equal(await journalCounter(), "9223372036854775807");
         assert.deepEqual(await counts(), beforeOverflow);
         await db("users").where({ id: actor.id }).update({ role: "AUDITOR" });
         assert.equal((await post()).status, 403);
+        assert.equal((await postContribution()).status, 403);
+        assert.equal(await journalCounter(), "9223372036854775807");
       },
     );
     await t.test(
@@ -2668,6 +2688,12 @@ test(
           .where({ id: result.body.transaction.id })
           .first();
         assert.equal(header.type, "CONTRIBUTION");
+        assert.equal(header.document_type, "JOURNAL_VOUCHER");
+        assert.equal(header.document_number, "1");
+        assert.equal(result.body.transaction.document_number, "1");
+        assert.equal(result.body.transaction.document_type, "JOURNAL_VOUCHER");
+        const journalCounter = async () => (await db("cycles").where({ id: cycle.id }).first("journal_voucher_counter")).journal_voucher_counter;
+        assert.equal(await journalCounter(), "1");
         assert.equal(header.amount, "76.50");
         assert.equal(header.user_id, null);
         assert.equal(header.cycle_id, cycle.id);
@@ -2721,11 +2747,13 @@ test(
         try {
           assert.equal((await post()).status, 409);
           assert.deepEqual(await counts(), before);
+          assert.equal(await journalCounter(), "1");
           await db.raw(`DROP TRIGGER test_contribution_failure ON public.account_entries;
         CREATE CONSTRAINT TRIGGER test_contribution_failure AFTER INSERT ON public.account_entries
         DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.reject_test_contribution_credit();`);
           assert.equal((await post()).status, 409);
           assert.deepEqual(await counts(), before);
+          assert.equal(await journalCounter(), "1");
         } finally {
           await db.raw(
             "DROP TRIGGER test_contribution_failure ON public.account_entries; DROP FUNCTION public.reject_test_contribution_credit()",

@@ -1401,6 +1401,12 @@ All API endpoints use the `/api/v1` prefix. Unversioned URLs (including `/`) ret
 
 ### Charge contributions
 
+Contribution charges share the cycle's `journal_voucher_counter` sequence with
+interest charges. Each successful request increments it once, regardless of
+member or posting batch count, and stores and returns `document_number` and
+`document_type: "JOURNAL_VOUCHER"` on the transaction. Rejected requests and
+failed writes roll back without consuming a number.
+
 `POST /api/v1/contributions/charge` requires `Authorization: Bearer <token>`,
 `x-group-slug`, and `Content-Type: application/json`. The caller must be an
 OWNER, ADMIN, or TREASURER in the selected group.
