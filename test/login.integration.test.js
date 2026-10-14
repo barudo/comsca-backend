@@ -2156,6 +2156,50 @@ test(
             body: JSON.parse(response.body),
           };
         };
+        const fundCash = async amount => db.transaction(async trx => {
+          const equity = accounts.find(account => account.type === "EQUITY");
+          const [funding] = await trx("transactions").insert({
+            group_id: group.id, cycle_id: cycle.id, type: "EQUITY", amount,
+          }).returning("id");
+          const [entry] = await trx("transaction_entries").insert({
+            group_id: group.id, transaction_id: funding.id, type: "EQUITY",
+            debit: cash.id, credit: equity.id, amount,
+          }).returning("id");
+          await trx("account_entries").insert([
+            { group_id: group.id, transaction_entry_id: entry.id, account_id: cash.id, amount },
+            { group_id: group.id, transaction_entry_id: entry.id, account_id: equity.id, amount: "-" + amount },
+          ]);
+        });
+        const snapshot = async () => ({
+          cycle: await db("cycles").where({ id: cycle.id }).first("disbursement_voucher_counter"),
+          applications: await db("loan_applications").where({ group_id: group.id }).orderBy("id"),
+          counts: await Promise.all(["transactions", "transaction_entries", "account_entries"].map(async table =>
+            (await db(table).where({ group_id: group.id }).count("* as count").first()).count)),
+        });
+        await db("loan_applications").insert({
+          group_id: group.id, cycle_id: cycle.id, user_id: member.id, amount_desired: "1.00",
+        });
+        const beforeRejection = await snapshot();
+        const nonCash = accounts.find(account => account.code === "1300");
+        assert.equal((await post({ ...input, credit: nonCash.id })).status, 400);
+        assert.deepEqual(await snapshot(), beforeRejection);
+        assert.equal((await post()).status, 409);
+        assert.deepEqual(await snapshot(), beforeRejection);
+        await fundCash("1.00");
+        const competing = await Promise.all([
+          post({ ...input, amount: "0.75" }),
+          post({ ...input, amount: "0.75" }),
+        ]);
+        assert.deepEqual(competing.map(result => result.status).sort(), [201, 409]);
+        assert.equal((await snapshot()).cycle.disbursement_voucher_counter, "1");
+        assert.equal((await db("transactions").where({ group_id: group.id, type: "LOAN_DISBURSED" }).count("* as count").first()).count, "1");
+        const application = await db("loan_applications").where({ group_id: group.id }).first();
+        assert.equal(application.status, "inactive");
+        assert.equal(application.amount_disbursed, "0.75");
+        const balance = await db("account_entries").where({ group_id: group.id, account_id: cash.id }).sum("amount as amount").first();
+        assert.equal(balance.amount, "0.25");
+        await fundCash("9999999999999999.99");
+        await fundCash("9999999999999999.99");
         const result = await post();
         assert.equal(result.status, 201);
         const header = result.body.transaction;

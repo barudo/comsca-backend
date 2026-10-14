@@ -119,8 +119,8 @@ class LoanDisbursementsHandler {
             fail("Selected accounts were not found in this group", 404);
           if (debit.type !== "ASSET" || debit.code !== "1100")
             fail("Debit must be Loans Receivable (1100), an ASSET account");
-          if (credit.type !== "ASSET")
-            fail("Credit must be an ASSET funding account");
+          if (credit.type !== "ASSET" || credit.code !== "1000")
+            fail("Credit must be Cash (1000), an ASSET account");
           const cycle = await trx("cycles")
             .where({ group_id })
             .whereIn("status", ["active", "distributing"])
@@ -153,6 +153,14 @@ class LoanDisbursementsHandler {
             .first("user_id");
           if (!membership)
             fail("Member does not belong to the transaction cycle");
+          // The cycle lock serializes disbursements before reading available cash.
+          // Compare in PostgreSQL numeric arithmetic to preserve exact cents.
+          const { rows: [cash] } = await trx.raw(
+            `SELECT COALESCE(SUM(amount), 0) >= ?::numeric AS sufficient
+             FROM account_entries WHERE group_id = ? AND account_id = ?`,
+            [input.amount, group_id, input.credit],
+          );
+          if (!cash.sufficient) fail("Insufficient cash on hand for this loan disbursement", 409);
           const [voucher] = await trx("cycles")
             .where({ id: cycle_id, group_id })
             .increment("disbursement_voucher_counter", 1)
