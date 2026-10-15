@@ -546,6 +546,43 @@ Unauthenticated requests return 401 and unauthorized users return 403.
 Apply migrations 034 and 035 before using this endpoint. Migration 035 rollback
 refuses to discard recorded payment links.
 
+`GET /api/v1/transactions/registers` returns a paginated document register.
+Requires a Bearer token, `x-group-slug`, and an OWNER or ADMIN profile in that
+group. Other roles receive 403.
+
+| Query | Behavior |
+| --- | --- |
+| `document` | `PR`: RECEIPT and PAYMENT_RECEIPT; `DV`: DISBURSEMENT_VOUCHER; `JV`: JOURNAL_VOUCHER. Omitted or empty includes all four stored types. |
+| `per_page` | Integer 1–100; default 25. |
+| `page` | Positive integer; default 1. |
+| `sorty_by` | Default `occurred_at`. Allowed: `id`, `occurred_at`, `created_at`, `updated_at`, `document_number`, `document_type`, `amount`, `type`, `status`, `cycle_id`. |
+| `sort_by` | Alias of `sorty_by`; if both are provided they must match. |
+| `order` | `asc` or `desc`; default `desc`. |
+
+Example: `GET /api/v1/transactions/registers?document=JV&per_page=25&page=1&sorty_by=document_number&order=desc`.
+Invalid values or repeated supported parameters return 400. Results contain
+transaction rows with non-null document numbers in the selected group, across
+all cycles and including active and voided transactions. Undocumented
+transactions are excluded. Sorting places null values last and uses `id` in
+the same direction to break ties. Group query parameters do not override the
+header-selected group.
+
+```json
+{
+  "success": true,
+  "data": [],
+  "pagination": {
+    "page": 1,
+    "per_page": 25,
+    "total": 0,
+    "total_pages": 0
+  }
+}
+```
+
+`total` counts matching documents before pagination. Empty or out-of-range
+pages return an empty `data` array with the matching count.
+
 `GET /api/v1/transactions/expenses` lists all `EXPENSE` transaction rows in
 the group selected by `x-group-slug`. Requires a Bearer token and a user profile
 in that group; all group roles may read. Returns
