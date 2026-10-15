@@ -208,6 +208,11 @@ function createRouter(database) {
     authenticate,
     expenses.create.bind(expenses),
   );
+  router.get(
+    "/api/v1/transactions/expenses",
+    authenticate,
+    expenses.list.bind(expenses),
+  );
   router.post("/api/v1/loan-apply", authenticate, loanApplications.create.bind(loanApplications));
   router.post("/api/v1/loans/apply", authenticate, loanApplications.apply.bind(loanApplications));
   router.get("/api/v1/loans/apply", authenticate, loanApplications.list.bind(loanApplications));

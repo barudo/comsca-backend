@@ -503,6 +503,16 @@ Other input fields are rejected. Returns 201 with
 `{ "success": true, "loan_application": { ... } }`. No disbursement or ledger
 posting occurs. Apply migration `029_create_loan_applications.js` before use.
 
+`GET /api/v1/transactions/expenses` lists all `EXPENSE` transaction rows in
+the group selected by `x-group-slug`. Requires a Bearer token and a user profile
+in that group; all group roles may read. Returns
+`{ "success": true, "data": [...] }`, or an empty `data` array when no expenses
+exist. Rows are ordered by `occurred_at DESC, id DESC`, across all cycles and
+transaction/payment statuses, including voided and unreconciled expenses.
+Each row includes the transaction columns, including document fields and
+`expense_payment_status` when migration 034 is installed. Query parameters
+do not override the group, type, or ordering. This endpoint is not paginated.
+
 Each successful expense increments the current cycle's `journal_voucher_counter`
 once and stores and returns `document_number` with
 `document_type: "JOURNAL_VOUCHER"`. It shares the cycle's journal voucher sequence
