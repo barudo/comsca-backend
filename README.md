@@ -503,6 +503,49 @@ Other input fields are rejected. Returns 201 with
 `{ "success": true, "loan_application": { ... } }`. No disbursement or ledger
 posting occurs. Apply migration `029_create_loan_applications.js` before use.
 
+`POST /api/v1/transactions/expenses/pay` pays 1–100 expenses in full.
+Requires a Bearer token, `x-group-slug`, and OWNER, ADMIN or TREASURER membership.
+
+```json
+{
+  "expenses": [
+    { "id": "10", "amount": "100" },
+    { "id": "11", "amount": "200" }
+  ],
+  "debit": "201",
+  "credit": "100"
+}
+```
+
+Each expense must be an active `EXPENSE` transaction in the group's current
+active/distributing cycle, explicitly `UNPAID`, with no recorded payment.
+Legacy `NULL` payment statuses must be reconciled first. Each submitted amount
+must equal the stored full expense amount. Duplicate IDs, partial payments,
+unsupported fields and totals exceeding numeric(18,2) are rejected. Use decimal
+strings for exact large values. The backend sums the validated amounts.
+
+Both accounts must belong to the selected group and current cycle. `debit` must
+be the LIABILITY account credited for the full amount of every original expense.
+Expenses with different payable accounts require separate batches. `credit`
+must be an ASSET account with a signed ledger balance sufficient for the total.
+
+Returns 201 with `{success,transaction,entries,account_entries,expense_payments}`.
+One `EXPENSE_PAYMENT` transaction and component record the total, with a positive
+payable posting and equal negative funding posting. One
+`DISBURSEMENT_VOUCHER` number is allocated from `disbursement_voucher_counter`.
+The `expense_payments` rows link each original expense to the payment, recording
+its full amount. Original expense amounts remain unchanged; their
+`expense_payment_status` becomes `PAID`. All writes and the counter commit
+atomically. Cycle and expense locks serialize competing payments, and a unique
+expense link prevents paying an expense twice.
+
+Invalid input/accounts return 400, missing or out-of-scope expenses/accounts
+return 404, and already-paid/unknown/voided expenses, amount or payable mismatches,
+insufficient funds, missing writable cycle, and database conflicts return 409.
+Unauthenticated requests return 401 and unauthorized users return 403.
+Apply migrations 034 and 035 before using this endpoint. Migration 035 rollback
+refuses to discard recorded payment links.
+
 `GET /api/v1/transactions/expenses` lists all `EXPENSE` transaction rows in
 the group selected by `x-group-slug`. Requires a Bearer token and a user profile
 in that group; all group roles may read. Returns

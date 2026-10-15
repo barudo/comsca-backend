@@ -2705,6 +2705,80 @@ test(
         assert.equal(await journalCounter(), "9223372036854775807");
       },
     );
+    await t.test("batch expense payments persist links and prevent overlapping double payment", async paymentTest => {
+      const [group] = await db("groups").insert({ name: "Expense payments", slug: "expense-payments" }).returning("id");
+      const authId = "afafafaf-afaf-4faf-8faf-afafafafafaf";
+      await db("auth.users").insert({ id: authId });
+      await db("users").insert({ group_id: group.id, auth_user_id: authId, first_name: "Expense", family_name: "Treasurer", role: "TREASURER" });
+      const [cycle] = await db("cycles").insert({ group_id: group.id, status: "active" }).returning("id");
+      const accounts = await db("accounts").where({ cycle_id: cycle.id });
+      const cash = accounts.find(row => row.code === "1000");
+      const payable = accounts.find(row => row.type === "LIABILITY");
+      const expenseAccount = accounts.find(row => row.type === "EXPENSE");
+      const donationAccount = accounts.find(row => row.code === "4300");
+      const paymentDb = knex({ client: "pg", connection: process.env.TEST_DATABASE_URL, pool: { min: 0, max: 3 } });
+      paymentTest.after(() => paymentDb.destroy());
+      const handler = serverless(createApp(paymentDb, { getUser: async () => ({ id: authId }) }));
+      const call = async (path, body) => {
+        const response = await handler({ version: "2.0", rawPath: path, rawQueryString: "",
+          headers: { authorization: "Bearer token", "x-group-slug": "expense-payments", "content-type": "application/json" },
+          requestContext: { http: { method: "POST", sourceIp: "127.0.0.1" } }, body: JSON.stringify(body), isBase64Encoded: false }, {});
+        return { status: response.statusCode, body: JSON.parse(response.body) };
+      };
+      const createExpense = async amount => {
+        const result = await call("/api/v1/transactions/add-expense", { debit: expenseAccount.id, credit: payable.id, amount, description: "Integration expense" });
+        assert.equal(result.status, 201);
+        return { id: result.body.transaction.id, amount };
+      };
+      const fund = async amount => {
+        assert.equal((await call("/api/v1/transactions/donations", { debit: cash.id, credit: donationAccount.id, amount })).status, 201);
+      };
+      const pay = expenses => call("/api/v1/transactions/expenses/pay", { expenses, debit: payable.id, credit: cash.id });
+      const first = await createExpense("100.00"), second = await createExpense("200.00");
+      const counter = async () => (await db("cycles").where({ id: cycle.id }).first()).disbursement_voucher_counter;
+      assert.equal((await pay([first, second])).status, 409);
+      assert.equal(await counter(), "0");
+      await fund("300.00");
+      const competing = await Promise.all([pay([first, second]), pay([second])]);
+      assert.deepEqual(competing.map(result => result.status).sort(), [201, 409]);
+      const winner = competing.find(result => result.status === 201);
+      const payment = await db("transactions").where({ id: winner.body.transaction.id }).first();
+      assert.equal(payment.type, "EXPENSE_PAYMENT");
+      assert.equal(payment.document_type, "DISBURSEMENT_VOUCHER");
+      assert.equal(payment.document_number, "1");
+      const links = await db("expense_payments").where({ payment_transaction_id: payment.id });
+      assert.equal(links.length, winner.body.expense_payments.length);
+      const entries = await db("transaction_entries").where({ transaction_id: payment.id });
+      const postings = await db("account_entries").where({ transaction_entry_id: entries[0].id }).orderBy("amount");
+      assert.deepEqual(postings.map(row => [row.account_id, row.amount]), [[cash.id, `-${payment.amount}`], [payable.id, payment.amount]]);
+      for (const expense of [first, second]) {
+        const stored = await db("transactions").where({ id: expense.id }).first();
+        assert.equal(stored.amount, expense.amount);
+        assert.equal(stored.expense_payment_status, links.some(link => link.expense_transaction_id === expense.id) ? "PAID" : "UNPAID");
+      }
+      assert.equal((await pay([second])).status, 409);
+      assert.equal(await counter(), "1");
+      // Unique expense links remain a database backstop even if status is changed.
+      await assert.rejects(db("expense_payments").insert({ ...links[0], created_at: undefined }), { code: "23505" });
+      const third = await createExpense("50.00");
+      await fund("50.00");
+      const before = await counter();
+      const beforeCounts = await db("transactions").where({ group_id: group.id }).count("* as count").first();
+      await db.raw(`CREATE FUNCTION public.reject_expense_payment_link() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN RAISE EXCEPTION 'test payment rejection' USING ERRCODE='23514'; END $$;
+        CREATE CONSTRAINT TRIGGER reject_expense_payment_link AFTER INSERT ON public.expense_payments
+        DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.reject_expense_payment_link();`);
+      try {
+        assert.equal((await pay([third])).status, 409);
+        assert.equal(await counter(), before);
+        assert.deepEqual(await db("transactions").where({ group_id: group.id }).count("* as count").first(), beforeCounts);
+        assert.equal((await db("transactions").where({ id: third.id }).first()).expense_payment_status, "UNPAID");
+        assert.equal((await db("expense_payments").where({ expense_transaction_id: third.id })).length, 0);
+      } finally {
+        await db.raw("DROP TRIGGER reject_expense_payment_link ON public.expense_payments; DROP FUNCTION public.reject_expense_payment_link()");
+      }
+      assert.equal((await pay([third])).status, 201);
+    });
     await t.test(
       "POST contributions persists members atomically and serializes roster and closure races",
       async () => {
