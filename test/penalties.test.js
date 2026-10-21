@@ -72,9 +72,10 @@ function fixture(t) {
         return state.cycle ? { id: "20" } : undefined;
       }
       if (q.sql.includes('from "cycle_members"')) {
-        assert.deepEqual(q.bindings, ["20", "1"]);
+        assert.deepEqual(q.bindings.slice(0, 2), ["20", "1"]);
+        assert.match(q.sql, /"cycle_members"\."user_id" = \?/);
         assert.match(q.sql, /inner join "users".*for share/);
-        return state.members;
+        return state.members.find(member => member.user_id === q.bindings[2]);
       }
       if (q.method === "update" && builder._single.table === "cycles") {
         assert.match(q.sql, /"journal_voucher_counter" = "journal_voucher_counter" \+ \?/);
@@ -84,9 +85,7 @@ function fixture(t) {
         return [{ journal_voucher_counter: state.voucherCounter }];
       }
       if (q.method === "insert") {
-        if (state.failTable === builder._single.table ||
-            (state.failLaterBatch && builder._single.table === "account_entries" &&
-             state.writes.some(write => write.table === "account_entries"))) {
+        if (state.failTable === builder._single.table) {
           throw Object.assign(new Error("write failed"), { code: "23514" });
         }
         const rows = [builder._single.insert]
@@ -142,7 +141,7 @@ function fixture(t) {
   return { state, post };
 }
 
-const input = { debit: "101", credit: "102", amount: "25.50" };
+const input = { user_id: "11", debit: "101", credit: "102", amount: "25.50" };
 
 test("penalty charge creates a PENALTY header and balanced CHARGE_PENALTY member entries", async (t) => {
   const { state, post } = fixture(t);
@@ -158,8 +157,8 @@ test("penalty charge creates a PENALTY header and balanced CHARGE_PENALTY member
     assert.equal(result.headers["cache-control"], "no-store");
     assert.equal(result.body.success, true);
     assert.equal(result.body.transaction.type, "PENALTY");
-    assert.equal(result.body.transaction.amount, "76.50");
-    assert.equal(result.body.transaction.user_id, null);
+    assert.equal(result.body.transaction.amount, "25.50");
+    assert.equal(result.body.transaction.user_id, "11");
     assert.equal(result.body.transaction.cycle_id, "20");
     assert.equal(result.body.transaction.description, "Absence penalty");
     assert.deepEqual(
@@ -171,11 +170,9 @@ test("penalty charge creates a PENALTY header and balanced CHARGE_PENALTY member
       ]),
       [
         ["11", "CHARGE_PENALTY", "25.50", "20"],
-        ["12", "CHARGE_PENALTY", "25.50", "20"],
-        ["13", "CHARGE_PENALTY", "25.50", "20"],
       ],
     );
-    assert.equal(result.body.account_entries.length, 6);
+    assert.equal(result.body.account_entries.length, 2);
     for (const entry of result.body.entries) {
       assert.deepEqual(
         result.body.account_entries
@@ -212,8 +209,8 @@ test("penalty charge validates amounts, IDs and supported fields before writes",
       String(amount),
     );
   }
-  for (const id of [null, [], {}, 1.5, 0, -1, "9223372036854775808", "01"]) {
-    for (const field of ["debit", "credit"])
+  for (const id of [undefined, null, [], {}, 1.5, 0, -1, "9223372036854775808", "01"]) {
+    for (const field of ["user_id", "debit", "credit"])
       assert.equal((await post({ ...input, [field]: id })).status, 400);
   }
   for (const body of [
@@ -221,7 +218,7 @@ test("penalty charge validates amounts, IDs and supported fields before writes",
     [],
     {},
     { ...input, debit: "102" },
-    ...["group_id", "cycle_id", "user_id", "type", "entries", "document_type", "document_number", "journal_voucher_counter"].map((field) => ({
+    ...["group_id", "cycle_id", "type", "entries", "document_type", "document_number", "journal_voucher_counter"].map((field) => ({
       ...input,
       [field]: "1",
     })),
@@ -257,8 +254,9 @@ test("penalty charge requires a current cycle, enrolled members and the correct 
   state.cycle = true;
   const members = state.members;
   state.members = [];
-  assert.equal((await post(input)).status, 409);
+  assert.equal((await post(input)).status, 404);
   state.members = members;
+  assert.equal((await post({ ...input, user_id: "999" })).status, 404);
   for (const field of ["debit", "credit"])
     assert.equal((await post({ ...input, [field]: "999" })).status, 404);
   for (const account of state.accounts) {
@@ -277,21 +275,13 @@ test("penalty charge requires a current cycle, enrolled members and the correct 
   assert.equal(state.voucherCounter, "0");
 });
 
-test("penalty charge preserves exact cents and rejects aggregate overflow", async (t) => {
-  const { state, post } = fixture(t);
-  assert.equal(
-    (await post({ ...input, amount: "9999999999999999.99" })).status,
-    400,
-  );
-  assert.equal(state.writes.length, 0);
-  assert.equal(state.voucherCounter, "0");
-  const maximum = await post({ ...input, amount: "3333333333333333.33" });
+test("penalty charge preserves exact cents without multiplying by the roster", async (t) => {
+  const { post } = fixture(t);
+  const maximum = await post({ ...input, amount: "9999999999999999.99" });
   assert.equal(maximum.status, 201);
   assert.equal(maximum.body.transaction.amount, "9999999999999999.99");
-  assert.equal(
-    (await post({ ...input, amount: 0.01 })).body.transaction.amount,
-    "0.03",
-  );
+  assert.equal((await post({ ...input, amount: 0.01 })).body.transaction.amount, "0.01");
+  assert.equal((await post({ ...input, user_id: 12 })).body.transaction.user_id, "12");
 });
 
 test("penalty charge rolls back commit conflicts and hides unexpected errors", async (t) => {
@@ -310,22 +300,17 @@ test("penalty charge rolls back commit conflicts and hides unexpected errors", a
   assert.equal(state.voucherCounter, "0");
 });
 
-test("penalty vouchers increment once for a batched roster and preserve bigint precision", async t => {
+test("penalty vouchers increment once for a selected member in a large roster and preserve bigint precision", async t => {
   const { state, post } = fixture(t);
-  state.members = Array.from({ length: 1001 }, (_, i) => ({ user_id: String(i + 100) }));
+  state.members = Array.from({ length: 1001 }, (_, i) => ({ user_id: String(i + 11) }));
   const first = await post(input);
   assert.equal(first.status, 201);
   assert.equal(first.body.transaction.document_type, "JOURNAL_VOUCHER");
   assert.equal(first.body.transaction.document_number, "1");
-  assert.equal(first.body.entries.length, 1001);
+  assert.equal(first.body.entries.length, 1);
   assert.equal(state.voucherCounter, "1");
   assert.match(state.queries.find(q => q.sql.includes('from "transactions"')).sql, /"document_type", "document_number"/);
   state.writes = [];
-  state.failLaterBatch = true;
-  assert.equal((await post(input)).status, 409);
-  assert.equal(state.writes.length, 0);
-  assert.equal(state.voucherCounter, "1");
-  state.failLaterBatch = false;
   state.voucherCounter = "9007199254740992";
   assert.equal((await post(input)).body.transaction.document_number, "9007199254740993");
   const writesBefore = state.writes.length;

@@ -2656,6 +2656,7 @@ test(
           return { status: response.statusCode, body: JSON.parse(response.body) };
         };
         const penaltyBody = {
+          user_id: member.id,
           debit: accounts.find(account => account.code === "1300").id,
           credit: accounts.find(account => account.code === "4100").id,
           amount: "1.00",
@@ -3052,7 +3053,7 @@ test(
         const handler = serverless(
           createApp(db, { getUser: async () => ({ id: authId }) }),
         );
-        const event = () => ({
+        const event = (user_id = members[1].id) => ({
           version: "2.0",
           rawPath: "/api/v1/penalties/charge",
           headers: {
@@ -3062,14 +3063,15 @@ test(
           },
           requestContext: { http: { method: "POST", sourceIp: "127.0.0.1" } },
           body: JSON.stringify({
+            user_id,
             debit: debit.id,
             credit: credit.id,
             amount: "10.25",
           }),
           isBase64Encoded: false,
         });
-        const post = async () => {
-          const result = await handler(event(), {});
+        const post = async (user_id) => {
+          const result = await handler(event(user_id), {});
           return { status: result.statusCode, body: JSON.parse(result.body) };
         };
         const result = await post();
@@ -3082,15 +3084,15 @@ test(
         assert.equal(savedVoucher.document_type, "JOURNAL_VOUCHER");
         const journalCounter = async () => (await db("cycles").where({ id: cycle.id }).first("journal_voucher_counter")).journal_voucher_counter;
         assert.equal(await journalCounter(), "1");
-        assert.equal(result.body.transaction.amount, "20.50");
-        assert.equal(result.body.transaction.user_id, null);
+        assert.equal(result.body.transaction.amount, "10.25");
+        assert.equal(result.body.transaction.user_id, members[1].id);
         assert.equal(result.body.transaction.cycle_id, cycle.id);
         const entries = await db("transaction_entries")
           .where({ transaction_id: result.body.transaction.id })
           .orderBy("user_id");
         assert.deepEqual(
           entries.map((entry) => entry.user_id),
-          members.map((member) => member.id).sort((a, b) => a - b),
+          [members[1].id],
         );
         assert.ok(
           entries.every(
@@ -3104,7 +3106,7 @@ test(
           "transaction_entry_id",
           entries.map((entry) => entry.id),
         );
-        assert.equal(postings.length, 4);
+        assert.equal(postings.length, 2);
         for (const entry of entries) {
           assert.deepEqual(
             postings
@@ -3128,6 +3130,20 @@ test(
               ).count,
           ),
         );
+        const [outsiderGroup] = await db("groups").insert({ name: "Outside penalty", slug: "outside-penalty" }).returning("id");
+        const outsiders = await db("users").insert([
+          { group_id: group.id, first_name: "Unenrolled", family_name: "User", role: "MEMBER" },
+          { group_id: outsiderGroup.id, first_name: "Other", family_name: "Group", role: "MEMBER" },
+        ]).returning("id");
+        for (const outsider of outsiders) {
+          assert.equal((await post(outsider.id)).status, 404);
+          assert.equal(await journalCounter(), "1");
+          const counts = await Promise.all(
+            ["transactions", "transaction_entries", "account_entries"].map(async table =>
+              (await db(table).where({ group_id: group.id }).count("* as count").first()).count),
+          );
+          assert.deepEqual(counts, before);
+        }
         await db.raw(`CREATE FUNCTION public.reject_test_penalty_credit() RETURNS trigger LANGUAGE plpgsql AS $$
       BEGIN IF NEW.account_id = ${credit.id} THEN RAISE EXCEPTION 'Test penalty posting rejection' USING ERRCODE='23514'; END IF; RETURN NEW; END $$;
       CREATE TRIGGER test_penalty_failure BEFORE INSERT ON public.account_entries

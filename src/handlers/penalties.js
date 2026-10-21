@@ -56,6 +56,7 @@ function penaltyInput(body) {
     ["user_id", "description", "debit", "credit", "amount"],
     "penalty charge",
   );
+  const user_id = id(body.user_id, "user_id");
   const debit = id(body.debit, "debit");
   const credit = id(body.credit, "credit");
   if (debit === credit) fail("Debit and credit must use different accounts");
@@ -75,6 +76,7 @@ function penaltyInput(body) {
     fail("amount must be greater than zero and fit numeric(18,2)");
   }
   return {
+    user_id,
     debit,
     credit,
     amount: `${whole}.${fraction}`,
@@ -107,29 +109,18 @@ class PenaltiesHandler {
             .forUpdate()
             .first("id");
           if (!cycle) fail("This group has no current cycle", 409);
-          const members = await trx("cycle_members")
+          const member = await trx("cycle_members")
             .join("users", "users.id", "cycle_members.user_id")
             .where({
               "cycle_members.cycle_id": cycle.id,
               "users.group_id": group_id,
+              "cycle_members.user_id": input.user_id,
             })
-            .orderBy("cycle_members.user_id")
             .forShare()
-            .select("cycle_members.user_id");
-          if (!members.length)
-            fail("The current cycle has no enrolled members", 409);
-          const isMember = members.some(
-            (member) => String(member.user_id) === String(input.user_id),
-          );
-          return { members, input };
-          if (!isMember) {
+            .first("cycle_members.user_id");
+          if (!member) {
             fail("User is not a member of the current cycle", 404);
           }
-          const cents =
-            BigInt(input.amount.replace(".", "")) * BigInt(members.length);
-          if (cents > 999999999999999999n)
-            fail("Total penalties must fit numeric(18,2)");
-          const amount = `${cents / 100n}.${String(cents % 100n).padStart(2, "0")}`;
           const accounts = await trx("accounts")
             .where({ group_id })
             .whereIn("id", [input.debit, input.credit])
@@ -167,11 +158,11 @@ class PenaltiesHandler {
             .insert({
               group_id,
               cycle_id: cycle.id,
-              user_id: null,
+              user_id: input.user_id,
               type: "PENALTY",
               document_type: "JOURNAL_VOUCHER",
               document_number: voucher.journal_voucher_counter,
-              amount,
+              amount: input.amount,
               description: input.description,
             })
             .returning("id");
