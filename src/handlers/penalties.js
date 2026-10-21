@@ -121,6 +121,7 @@ class PenaltiesHandler {
           const isMember = members.some(
             (member) => String(member.user_id) === String(input.user_id),
           );
+          return { members, input };
           if (!isMember) {
             fail("User is not a member of the current cycle", 404);
           }
