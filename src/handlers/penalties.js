@@ -51,7 +51,11 @@ function description(value) {
 }
 
 function penaltyInput(body) {
-  record(body, ["description", "debit", "credit", "amount"], "penalty charge");
+  record(
+    body,
+    ["user_id", "description", "debit", "credit", "amount"],
+    "penalty charge",
+  );
   const debit = id(body.debit, "debit");
   const credit = id(body.credit, "credit");
   if (debit === credit) fail("Debit and credit must use different accounts");
@@ -114,6 +118,12 @@ class PenaltiesHandler {
             .select("cycle_members.user_id");
           if (!members.length)
             fail("The current cycle has no enrolled members", 409);
+          const isMember = members.some(
+            (member) => String(member.user_id) === String(input.user_id),
+          );
+          if (!isMember) {
+            fail("User is not a member of the current cycle", 404);
+          }
           const cents =
             BigInt(input.amount.replace(".", "")) * BigInt(members.length);
           if (cents > 999999999999999999n)
@@ -166,41 +176,39 @@ class PenaltiesHandler {
             .returning("id");
           const entries = [];
           const account_entries = [];
-          for (let offset = 0; offset < members.length; offset += 1000) {
-            const batch = await trx("transaction_entries")
-              .insert(
-                members.slice(offset, offset + 1000).map((member) => ({
-                  group_id,
-                  transaction_id: header.id, debit: input.debit, credit: input.credit,
-                  cycle_id: cycle.id,
-                  user_id: member.user_id,
-                  type: "CHARGE_PENALTY",
-                  amount: input.amount,
-                  description: input.description,
-                })),
-              )
-              .returning("*");
-            entries.push(...batch);
-            const postings = await trx("account_entries")
-              .insert(
-                batch.flatMap((entry) => [
-                  {
-                    group_id,
-                    transaction_entry_id: entry.id,
-                    account_id: input.debit,
-                    amount: input.amount,
-                  },
-                  {
-                    group_id,
-                    transaction_entry_id: entry.id,
-                    account_id: input.credit,
-                    amount: `-${input.amount}`,
-                  },
-                ]),
-              )
-              .returning("*");
-            account_entries.push(...postings);
-          }
+          const [entry] = await trx("transaction_entries")
+            .insert({
+              group_id,
+              transaction_id: header.id,
+              debit: input.debit,
+              credit: input.credit,
+              cycle_id: cycle.id,
+              user_id: input.user_id,
+              type: "CHARGE_PENALTY",
+              amount: input.amount,
+              description: input.description,
+            })
+            .returning("*");
+
+          entries.push(entry);
+          const postings = await trx("account_entries")
+            .insert([
+              {
+                group_id,
+                transaction_entry_id: entry.id,
+                account_id: input.debit,
+                amount: input.amount,
+              },
+              {
+                group_id,
+                transaction_entry_id: entry.id,
+                account_id: input.credit,
+                amount: `-${input.amount}`,
+              },
+            ])
+            .returning("*");
+          account_entries.push(...postings);
+
           const transaction = await trx("transactions")
             .where({ id: header.id, group_id })
             .first(transactionColumns);
@@ -215,17 +223,21 @@ class PenaltiesHandler {
           .json({ success: false, error: error.message });
       }
       if (
-        ["22003", "23001", "23503", "23505", "23514", "40001", "40P01"].includes(
-          error.code,
-        )
+        [
+          "22003",
+          "23001",
+          "23503",
+          "23505",
+          "23514",
+          "40001",
+          "40P01",
+        ].includes(error.code)
       ) {
-        return response
-          .status(409)
-          .json({
-            success: false,
-            error:
-              "Penalties could not be committed; refresh the selected records and retry",
-          });
+        return response.status(409).json({
+          success: false,
+          error:
+            "Penalties could not be committed; refresh the selected records and retry",
+        });
       }
       return next(error);
     }
