@@ -22,7 +22,13 @@ function fixture(t) {
       const parentGroup = q.bindings[1] === "99" ? "2" : "1";
       return state.parent && q.bindings[0] === parentGroup ? { id: q.bindings[1] } : undefined;
     }
-    assert.match(q.sql, /select \* from "transaction_entries" where "group_id" = \? and "transaction_id" = \? order by "id" asc/);
+    assert.match(q.sql, /select "entries"\.\*/);
+    assert.match(q.sql, /left join "users" as "entry_user" on "entry_user"\."id" = "entries"\."user_id" and "entry_user"\."group_id" = "entries"\."group_id"/);
+    assert.match(q.sql, /where "entries"\."group_id" = \? and "entries"\."transaction_id" = \? order by "entries"\."id" asc/);
+    assert.doesNotMatch(q.sql, /password|auth_user_id|"entry_user"\.\*/);
+    for (const field of ["id", "group_id", "first_name", "family_name", "username", "email", "phone", "address", "role", "created_at", "updated_at"]) {
+      assert.ok(q.sql.includes(`"entry_user"."${field}" as "entry_user_${field}"`));
+    }
     assert.equal(q.bindings[0], "1");
     return state.rows;
   } });
@@ -45,9 +51,24 @@ test("OWNER and ADMIN receive the selected transaction entries with precision pr
   ];
   for (const role of ["OWNER", "ADMIN"]) {
     state.role = role;
-    assert.deepEqual(await get("9223372036854775807"), { status: 200, body: { success: true, data: state.rows } });
+    assert.deepEqual(await get("9223372036854775807"), { status: 200, body: { success: true, data: state.rows.map(row => ({ ...row, user: null })) } });
     assert.deepEqual(state.queries.at(-1).bindings, ["1", "9223372036854775807"]);
   }
+});
+
+test("entries include safe nested user profiles without overwriting entry fields", async t => {
+  const { state, get } = fixture(t);
+  const user = { id: "9007199254740993", group_id: "1", first_name: "Ana", family_name: "Cruz",
+    username: "ana", email: "ana@example.com", phone: null, address: null, role: "MEMBER",
+    created_at: "2025-01-01T00:00:00.000Z", updated_at: "2025-02-01T00:00:00.000Z" };
+  const entry = { id: "101", group_id: "1", transaction_id: "42", user_id: user.id,
+    debit: "100.00", created_at: "2026-10-23T00:00:00.000Z" };
+  state.rows = [{ ...entry, ...Object.fromEntries(Object.entries(user).map(([key, value]) => [`entry_user_${key}`, value])) },
+    { id: "102", user_id: null, entry_user_id: null },
+    { id: "103", user_id: "999", ...Object.fromEntries(Object.keys(user).map(key => [`entry_user_${key}`, null])) }];
+  assert.deepEqual(await get(), { status: 200, body: { success: true, data: [
+    { ...entry, user }, { id: "102", user_id: null, user: null }, { id: "103", user_id: "999", user: null },
+  ] } });
 });
 
 test("existing empty transactions return an empty array; missing and other-group transactions return 404", async t => {

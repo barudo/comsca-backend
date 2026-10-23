@@ -591,7 +591,11 @@ membership in that group. All entry columns are returned; bigint IDs and decimal
 amounts retain their database string representation. An existing transaction
 with no entries returns an empty array. Invalid transaction IDs return 400;
 missing transactions (including transactions belonging to another group) return
-404. Other roles and users without membership receive 403.
+404. Other roles and users without membership receive 403. Each entry includes
+a nested `user` joined by `user_id` within the same group, or `null` when no user
+matches. User fields are `id`, `group_id`, `first_name`, `family_name`, `username`,
+`email`, `phone`, `address`, `role`, `created_at`, and `updated_at`; credentials
+and authentication identifiers are excluded.
 
 `GET /api/v1/transactions/expenses` lists all `EXPENSE` transaction rows in
 the group selected by `x-group-slug`. Requires a Bearer token and a user profile
