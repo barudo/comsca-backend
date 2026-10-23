@@ -560,6 +560,7 @@ group. Other roles receive 403.
 | `order` | `asc` or `desc`; default `desc`. |
 
 Example: `GET /api/v1/transactions/registers?document=JV&per_page=25&page=1&sorty_by=document_number&order=desc`.
+
 Invalid values or repeated supported parameters return 400. Results contain
 transaction rows with non-null document numbers in the selected group, across
 all cycles and including active and voided transactions. Undocumented
@@ -582,6 +583,15 @@ header-selected group.
 
 `total` counts matching documents before pagination. Empty or out-of-range
 pages return an empty `data` array with the matching count.
+
+`GET /api/v1/transactions/:transactionId/entries` returns all `transaction_entries`
+for a transaction as `{ "success": true, "data": [...] }`, ordered by entry ID
+ascending. Requires a bearer token, `x-group-slug`, and an `OWNER` or `ADMIN`
+membership in that group. All entry columns are returned; bigint IDs and decimal
+amounts retain their database string representation. An existing transaction
+with no entries returns an empty array. Invalid transaction IDs return 400;
+missing transactions (including transactions belonging to another group) return
+404. Other roles and users without membership receive 403.
 
 `GET /api/v1/transactions/expenses` lists all `EXPENSE` transaction rows in
 the group selected by `x-group-slug`. Requires a Bearer token and a user profile

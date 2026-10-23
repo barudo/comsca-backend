@@ -19,6 +19,7 @@ const DonationsHandler = require("../handlers/donations");
 const ExpensesHandler = require("../handlers/expenses");
 const ExpensePaymentsHandler = require("../handlers/expense-payments");
 const TransactionRegistersHandler = require("../handlers/transaction-registers");
+const TransactionEntriesHandler = require("../handlers/transaction-entries");
 const LoanApplicationsHandler = require("../handlers/loan-applications");
 const GroupUsersHandler = require("../handlers/group-users");
 const GroupUserListHandler = require("../handlers/group-user-list");
@@ -50,6 +51,7 @@ function createRouter(database) {
   const expenses = new ExpensesHandler();
   const expensePayments = new ExpensePaymentsHandler();
   const transactionRegisters = new TransactionRegistersHandler();
+  const transactionEntries = new TransactionEntriesHandler();
   const loanApplications = new LoanApplicationsHandler();
   const groupUsers = new GroupUsersHandler();
   const groupUserList = new GroupUserListHandler();
@@ -228,6 +230,11 @@ function createRouter(database) {
     transactionRegisters.list.bind(transactionRegisters),
   );
   router.post("/api/v1/loan-apply", authenticate, loanApplications.create.bind(loanApplications));
+  router.get(
+    "/api/v1/transactions/:transactionId/entries",
+    authenticate,
+    transactionEntries.list.bind(transactionEntries),
+  );
   router.post("/api/v1/loans/apply", authenticate, loanApplications.apply.bind(loanApplications));
   router.get("/api/v1/loans/apply", authenticate, loanApplications.list.bind(loanApplications));
   router.post("/api/v1/me/loans/apply", authenticate, loanApplications.applyMe.bind(loanApplications));
