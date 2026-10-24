@@ -46,6 +46,9 @@ test(
       "006_create_accounts_and_transaction_entries",
       "018_scope_account_ledger",
       "021_validate_account_entries_after_changes",
+      "022_add_cycle_document_counters",
+      "023_add_transaction_document_numbers",
+      "031_add_entry_accounts_and_document_number_index",
       "032_add_transaction_status",
       "027_add_contribution_member_entries",
       "036_support_transaction_voids",
@@ -315,6 +318,8 @@ test(
       active_members: 2,
     });
 
+    // Four voided postings and their reversals add 493.80 to each side
+    // of cash/equity activity, while net balances remain unchanged.
     const trialBalance = await trialBalanceReport();
     assert.equal(trialBalance.current_cycle_id, "20");
     assert.deepEqual(
@@ -326,12 +331,12 @@ test(
         account.credit_balance,
       ]),
       [
-        ["1000", "340.38", "100.10", "240.28", "0.00"],
+        ["1000", "834.18", "593.90", "240.28", "0.00"],
         ["1100", "107.60", "30.03", "77.57", "0.00"],
         ["1400", "29.90", "10.10", "19.80", "0.00"],
         ["1500", "0.00", "0.00", "0.00", "0.00"],
         ["2000", "0.00", "10.00", "0.00", "10.00"],
-        ["3000", "0.00", "300.25", "0.00", "300.25"],
+        ["3000", "493.80", "794.05", "0.00", "300.25"],
         ["4000", "0.00", "7.50", "0.00", "7.50"],
         ["4100", "0.00", "0.00", "0.00", "0.00"],
         ["4400", "0.00", "29.90", "0.00", "29.90"],
@@ -405,7 +410,7 @@ test(
     );
     assert.deepEqual(
       incomeStatement.expenses.accounts.map(({ code, amount }) => [code, amount]),
-      [["5000", "10.00"]],
+      [["5000", "10.00"], ["5100", "0.00"]],
     );
     assert.deepEqual(
       [incomeStatement.total_income, incomeStatement.total_expenses, incomeStatement.net_income],
@@ -445,7 +450,7 @@ test(
       [fromOnlyIncomeStatement.total_income,
         fromOnlyIncomeStatement.total_expenses,
         fromOnlyIncomeStatement.net_income],
-      ["37.40", "10.00", "27.40"],
+      ["33.00", "10.00", "23.00"],
     );
 
     const toOnlyIncomeStatement = await incomeStatementReport({
@@ -455,7 +460,7 @@ test(
       [toOnlyIncomeStatement.total_income,
         toOnlyIncomeStatement.total_expenses,
         toOnlyIncomeStatement.net_income],
-      ["7.50", "10.00", "-2.50"],
+      ["11.90", "10.00", "1.90"],
     );
 
     const [donationIncomeAccount] = await db("accounts")
