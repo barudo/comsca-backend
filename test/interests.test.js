@@ -69,6 +69,7 @@ function fixture(t) {
       }
       if (query.sql.includes("FROM transaction_entries e")) {
         assert.deepEqual(query.bindings, ["1", "1", "20", "20", "1"]);
+        assert.match(query.sql, /t\.status = 'active'/);
         assert.match(query.sql, /ORDER BY u\.id, t\.occurred_at, t\.id, e\.id/);
         assert.match(query.sql, /e\.group_id = \? AND t\.group_id = \?/);
         return { rows: state.events };

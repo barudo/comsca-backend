@@ -65,7 +65,7 @@ class DashboardHandler {
                 - COALESCE(SUM(e.amount) FILTER (WHERE e.type = 'PAY_CONTRIBUTION'), 0.00) AS contributions_due
             FROM transaction_entries e
             JOIN transactions t ON t.id = e.transaction_id AND t.group_id = e.group_id
-            WHERE e.group_id = ? AND t.group_id = ? AND t.cycle_id = ?
+            WHERE e.group_id = ? AND t.group_id = ? AND t.cycle_id = ? AND t.status = 'active'
           ), member_total AS (
             SELECT COUNT(*)::int AS active_members
             FROM cycle_members cm

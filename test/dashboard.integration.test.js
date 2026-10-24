@@ -46,7 +46,9 @@ test(
       "006_create_accounts_and_transaction_entries",
       "018_scope_account_ledger",
       "021_validate_account_entries_after_changes",
+      "032_add_transaction_status",
       "027_add_contribution_member_entries",
+      "036_support_transaction_voids",
     ]) {
       await db.transaction((trx) =>
         require(`../migrations/${migration}`).up(trx),
@@ -119,6 +121,7 @@ test(
       cycle_id = 20,
       user_id = 11,
       occurred_at = "2026-01-01T00:00:00.000Z",
+      status = "active",
     }) {
       await db.transaction(async (trx) => {
         const [header] = await trx("transactions")
@@ -155,6 +158,13 @@ test(
             amount: `-${amount}`,
           },
         ]);
+        if (status === "voided") {
+          await trx.raw(`INSERT INTO account_entries
+            (group_id, transaction_entry_id, account_id, amount, reversal_of_id)
+            SELECT group_id, transaction_entry_id, account_id, -amount, id
+            FROM account_entries WHERE transaction_entry_id = ?`, [entry.id]);
+          await trx("transactions").where({ id: header.id }).update({ status });
+        }
       });
     }
 
@@ -225,6 +235,12 @@ test(
       cycle_id: 30,
       user_id: 30,
     });
+
+    // Voided component amounts must not affect shares or contributions;
+    // their linked reversals also leave signed ledger totals unchanged.
+    for (const type of ["BUY_SHARE", "CHARGE_CONTRIBUTION", "CONTRIBUTION", "PAY_CONTRIBUTION"]) {
+      await post({ type, amount: "123.45", debit: "1000", credit: "3000", status: "voided" });
+    }
 
     const handler = new DashboardHandler();
     const trialBalanceHandler = new AccountingTrialBalanceHandler();

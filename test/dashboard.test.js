@@ -54,6 +54,7 @@ function fixture(t) {
         assert.match(query.sql, /order by "created_at" desc, "id" desc/);
         return state.cycle;
       }
+      assert.match(query.sql, /t.status = 'active'/);
       assert.match(query.sql, /a\.group_id = \? AND a\.cycle_id = \?/);
       assert.match(query.sql, /e\.group_id = \? AND t\.group_id = \? AND t\.cycle_id = \?/);
       assert.match(query.sql, /cm\.cycle_id = \?/);

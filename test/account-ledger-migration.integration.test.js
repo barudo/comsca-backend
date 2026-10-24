@@ -421,3 +421,91 @@ test('account ledger conversion, activation, concurrency and guarded rollback', 
   await db.transaction(trx => applyLedger(trx));
   assert.equal(await db.schema.hasColumn('transaction_entries','account_id'),false);
 });
+
+test('transaction voids enforce exact linked reversals and serialize concurrent requests', { skip: !process.env.TEST_DATABASE_URL }, async t => {
+  const admin = knex({ client: 'pg', connection: process.env.TEST_DATABASE_URL });
+  const name = `void_ledger_${process.pid}_${Date.now()}`;
+  let db, created = false;
+  t.after(async () => {
+    try { if (db) await db.destroy(); if (created) await admin.raw('DROP DATABASE ??', [name]); }
+    finally { await admin.destroy(); }
+  });
+  await admin.raw('CREATE DATABASE ??', [name]); created = true;
+  const url = new URL(process.env.TEST_DATABASE_URL); url.pathname = `/${name}`;
+  db = knex({ client: 'pg', connection: url.toString(), pool: { min: 0, max: 5 } });
+  await db.raw(`CREATE TABLE groups(id bigserial PRIMARY KEY);
+    CREATE TABLE cycles(id bigserial PRIMARY KEY,group_id bigint REFERENCES groups(id));
+    CREATE TABLE users(id bigserial PRIMARY KEY,group_id bigint REFERENCES groups(id),auth_user_id text,role text);
+    CREATE TABLE cycle_members(cycle_id bigint REFERENCES cycles(id),user_id bigint REFERENCES users(id),PRIMARY KEY(cycle_id,user_id));`);
+  for (const file of ['005_create_transactions','006_create_accounts_and_transaction_entries','018_scope_account_ledger',
+    '021_validate_account_entries_after_changes','032_add_transaction_status']) {
+    await db.transaction(trx => require(`../migrations/${file}`).up(trx));
+  }
+  await db.raw('CREATE TABLE expense_payments(group_id bigint,expense_transaction_id bigint,payment_transaction_id bigint)');
+  const voids = require('../migrations/036_support_transaction_voids');
+  await db.transaction(trx => voids.up(trx));
+  await db.transaction(trx => voids.down(trx));
+  await db.transaction(trx => voids.up(trx));
+  await db('groups').insert([{ id: 1 }, { id: 2 }]);
+  await db('users').insert({ group_id: 1, auth_user_id: 'actor', role: 'OWNER' });
+  await db('cycles').insert({ id: 1, group_id: 1 });
+  const accounts = await db('accounts').insert([
+    { group_id: 1, code: '1000', name: 'Cash', type: 'ASSET' },
+    { group_id: 1, code: '1100', name: 'Loans', type: 'ASSET' },
+    { group_id: 1, code: '2000', name: 'Payable', type: 'LIABILITY' },
+    { group_id: 2, code: '1000', name: 'Other cash', type: 'ASSET' },
+  ]).returning('*');
+  const make = () => db.transaction(async trx => {
+    const [header] = await trx('transactions').insert({ group_id: 1, cycle_id: 1, type: 'PAYMENT', amount: '9007199254740993.99' }).returning('*');
+    for (const amount of ['9007199254740992.99', '1.00']) {
+      const [component] = await trx('transaction_entries').insert({ group_id: 1, transaction_id: header.id, type: 'PAYMENT', amount }).returning('*');
+      // Split debit postings deliberately have no debit/credit account references.
+      await trx('account_entries').insert([
+        { group_id: 1, transaction_entry_id: component.id, account_id: accounts[0].id, amount: '0.50' },
+        { group_id: 1, transaction_entry_id: component.id, account_id: accounts[1].id, amount: trx.raw('?::numeric - 0.50', [amount]) },
+        { group_id: 1, transaction_entry_id: component.id, account_id: accounts[2].id, amount: `-${amount}` },
+      ]);
+    }
+    return header;
+  });
+  const header = await make(), unrelated = await make();
+  const originals = await db('account_entries as p').join('transaction_entries as e', 'e.id', 'p.transaction_entry_id')
+    .where('e.transaction_id', header.id).select('p.*').orderBy('p.id');
+  const reverse = async (trx, transform = row => row) => {
+    await trx('account_entries').insert(originals.map(p => transform({ group_id: p.group_id, transaction_entry_id: p.transaction_entry_id,
+      account_id: p.account_id, amount: p.amount.startsWith('-') ? p.amount.slice(1) : `-${p.amount}`, reversal_of_id: p.id })));
+    await trx('transactions').where({ id: header.id }).update({ status: 'voided' });
+  };
+  for (const transform of [row => ({ ...row, amount: '1.00' }), row => ({ ...row, account_id: accounts[1].id }),
+    row => ({ ...row, group_id: '2', account_id: accounts[3].id }),
+    row => ({ ...row, transaction_entry_id: originals.at(-1).transaction_entry_id })]) {
+    await assert.rejects(db.transaction(trx => reverse(trx, transform)));
+  }
+  await assert.rejects(db.transaction(async trx => {
+    await trx('transactions').where({ id: header.id }).update({ status: 'voided' });
+  }), { code: '23514' });
+  await assert.rejects(db.transaction(async trx => {
+    await reverse(trx);
+    await trx('transactions').where({ id: header.id }).update({ status: 'active' });
+  }), { code: '23514' });
+  assert.equal((await db('account_entries').whereNotNull('reversal_of_id')).length, 0);
+  const Handler = require('../src/handlers/transactions');
+  const invoke = async () => {
+    const response = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
+    await new Handler().void({ app: { locals: { database: db } }, authUser: { id: 'actor' }, group: { id: '1' }, params: { transactionId: header.id } }, response, error => { throw error; });
+    return response;
+  };
+  const results = await Promise.all([invoke(), invoke(), invoke()]);
+  for (const response of results) { assert.equal(response.statusCode, 200); assert.equal(response.body.transaction.status, 'voided'); }
+  const reversals = await db('account_entries').whereNotNull('reversal_of_id');
+  assert.equal(reversals.length, originals.length);
+  assert.deepEqual(await db('account_entries').whereIn('id', originals.map(p => p.id)).orderBy('id'), originals);
+  const balances = await db('account_entries as p').join('transaction_entries as e', 'e.id', 'p.transaction_entry_id')
+    .where('e.transaction_id', header.id).groupBy('p.account_id').sum('p.amount as amount');
+  assert.ok(balances.every(row => row.amount === '0.00'));
+  assert.equal((await db('transactions').where({ id: unrelated.id }).first()).status, 'active');
+  await assert.rejects(db.transaction(trx => voids.down(trx)), /lose transaction reversals/);
+  await assert.rejects(db('account_entries').where({ id: reversals[0].id }).update({ reversal_of_id: reversals[1].id }), { code: '23514' });
+  await assert.rejects(db('account_entries').where({ id: reversals[0].id }).del(), { code: '23514' });
+  await assert.rejects(db('transactions').where({ id: header.id }).update({ status: 'active' }), { code: '23514' });
+});

@@ -71,6 +71,7 @@ function fixture(t) {
         q.sql,
         /WHERE e.group_id = \? AND t.group_id = \? AND t.cycle_id = \?/,
       );
+      assert.match(q.sql, /t.status = 'active'/);
       assert.match(q.sql, /WHERE u.group_id = \?/);
       assert.match(q.sql, /ORDER BY u.family_name, u.first_name, u.id/);
       assert.match(q.sql, /COALESCE\(e.user_id, t.user_id\)/);

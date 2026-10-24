@@ -46,7 +46,9 @@ test(
       "006_create_accounts_and_transaction_entries",
       "018_scope_account_ledger",
       "021_validate_account_entries_after_changes",
+      "032_add_transaction_status",
       "027_add_contribution_member_entries",
+      "036_support_transaction_voids",
     ]) {
       await db.transaction((trx) =>
         require(`../migrations/${migration}`).up(trx),
@@ -141,7 +143,7 @@ test(
     async function post(
       type,
       amount,
-      { group = 1, cycle = 20, headerUser = 11, entryUser = null } = {},
+      { group = 1, cycle = 20, headerUser = 11, entryUser = null, status = "active" } = {},
     ) {
       return db.transaction(async (trx) => {
         const [header] = await trx("transactions")
@@ -180,6 +182,13 @@ test(
             amount: `-${amount}`,
           },
         ]);
+        if (status === "voided") {
+          await trx.raw(`INSERT INTO account_entries
+            (group_id, transaction_entry_id, account_id, amount, reversal_of_id)
+            SELECT group_id, transaction_entry_id, account_id, -amount, id
+            FROM account_entries WHERE transaction_entry_id = ?`, [entry.id]);
+          await trx("transactions").where({ id: header.id }).update({ status });
+        }
         return entry.id;
       });
     }
@@ -206,6 +215,12 @@ test(
     await post("BUY_SHARE", "999.99", { group: 2, cycle: 30, headerUser: 31 });
     await post("BUY_SHARE", "999.99", { headerUser: null }); // No member identity.
     await post("BUY_SHARE", "999.99", { cycle: null, headerUser: null });
+    // Preserve the active totals below despite retained voided components.
+    for (const type of ["BUY_SHARE", "LOAN_DISBURSED", "LOAN_INTEREST", "LOAN_PAYMENT",
+      "CHARGE_PENALTY", "PENALTY_PAYMENT", "CHARGE_CONTRIBUTION", "CONTRIBUTION", "PAY_CONTRIBUTION"]) {
+      await post(type, type.endsWith("PAYMENT") || type === "PAY_CONTRIBUTION" ? "23.45" : "123.45",
+        { entryUser: 11, status: "voided" });
+    }
     const handler = new CycleMembersHandler();
     async function report() {
       let body;

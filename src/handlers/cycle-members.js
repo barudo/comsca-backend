@@ -87,7 +87,7 @@ class CycleMembersHandler {
                 WHEN e.type = 'PAY_CONTRIBUTION' THEN -e.amount ELSE 0.00 END) AS unpaid_contributions
             FROM transaction_entries e
             JOIN transactions t ON t.id = e.transaction_id AND t.group_id = e.group_id
-            WHERE e.group_id = ? AND t.group_id = ? AND t.cycle_id = ?
+            WHERE e.group_id = ? AND t.group_id = ? AND t.cycle_id = ? AND t.status = 'active'
             GROUP BY COALESCE(e.user_id, t.user_id)
           ) b ON b.user_id = u.id
           LEFT JOIN LATERAL (
