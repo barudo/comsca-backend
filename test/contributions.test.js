@@ -33,7 +33,7 @@ function fixture(t) {
       return state.accounts.filter(account => q.bindings.slice(1).includes(account.id));
     }
     if (q.sql.includes('from "cycles"')) {
-      assert.deepEqual(q.bindings, ["1", "draft", "active", "distributing", 1]);
+      assert.deepEqual(q.bindings, ["1", "draft", "active", 1]);
       assert.match(q.sql, /order by "created_at" desc, "id" desc.*for update/);
       return state.cycle ? { id: "20" } : undefined;
     }

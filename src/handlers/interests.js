@@ -122,13 +122,13 @@ class InterestsHandler {
           const input = interestInput(request.body);
           const cycle = await trx("cycles")
             .where({ group_id })
-            .whereIn("status", ["active", "distributing"])
+            .whereIn("status", ["active"])
             .orderBy("created_at", "desc")
             .orderBy("id", "desc")
             .forUpdate()
             .first("id", "interest_rate", "interest_period", "interest_method");
           if (!cycle)
-            fail("The group has no active or distributing cycle", 409);
+            fail("An active cycle is required to charge interest", 409);
           if (
             cycle.interest_rate === null ||
             cycle.interest_period === null ||

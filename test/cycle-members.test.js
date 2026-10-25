@@ -22,7 +22,7 @@ function fixture(t) {
     }
     if (q.sql.includes('from "cycles"')) {
       assert.match(q.sql, /for update$/);
-      assert.deepEqual(q.bindings, ["1", "draft", "active", "distributing", 1]);
+      assert.deepEqual(q.bindings, ["1", "draft", "active", 1]);
       return state.cycle;
     }
     if (q.sql.includes('from "users"')) {

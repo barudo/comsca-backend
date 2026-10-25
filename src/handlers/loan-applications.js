@@ -123,7 +123,7 @@ class LoanApplicationsHandler {
         const amount_desired = amount(body.amount_desired);
         const user_id = self ? actor.id : userId(body.user_id);
         const cycle = await trx("cycles").where({ group_id })
-          .whereIn("status", ["draft", "active", "distributing"])
+          .whereIn("status", ["draft", "active"])
           .orderBy("created_at", "desc").orderBy("id", "desc")
           .forUpdate().first("id");
         if (!cycle) fail("This group has no current cycle", 409);

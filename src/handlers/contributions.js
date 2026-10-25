@@ -57,7 +57,7 @@ class ContributionsHandler {
         const input = contributionInput(request.body);
         // Share the enrollment/lifecycle lock so the charge sees a stable roster.
         const cycle = await trx("cycles").where({ group_id })
-          .whereIn("status", ["draft", "active", "distributing"])
+          .whereIn("status", ["draft", "active"])
           .orderBy("created_at", "desc").orderBy("id", "desc").forUpdate().first("id");
         if (!cycle) fail("This group has no current cycle", 409);
         const members = await trx("cycle_members").join("users", "users.id", "cycle_members.user_id")

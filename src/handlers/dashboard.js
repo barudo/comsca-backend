@@ -58,7 +58,7 @@ class DashboardHandler {
           ), financial_totals AS (
             SELECT
               COALESCE(SUM(e.amount) FILTER (WHERE e.type IN ('LOAN_DISBURSED', 'LOAN_DISBURSEMENT', 'LOAN_INTEREST')), 0.00)
-                - COALESCE(SUM(e.amount) FILTER (WHERE e.type = 'LOAN_PAYMENT'), 0.00) AS outstanding_loans,
+                - COALESCE(SUM(e.amount) FILTER (WHERE e.type IN ('LOAN_PAYMENT', 'DISTRIBUTION_LOAN_OFFSET')), 0.00) AS outstanding_loans,
               COALESCE(SUM(e.amount) FILTER (WHERE e.type = 'BUY_SHARE'), 0.00) AS share_capital,
               COALESCE(SUM(e.amount) FILTER (WHERE e.type = 'PAY_CONTRIBUTION'), 0.00) AS contributions_collected,
               COALESCE(SUM(e.amount) FILTER (WHERE e.type IN ('CHARGE_CONTRIBUTION', 'CONTRIBUTION')), 0.00)

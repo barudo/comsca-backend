@@ -80,7 +80,7 @@ class CycleMembersHandler {
             SELECT COALESCE(e.user_id, t.user_id) AS user_id,
               SUM(CASE WHEN e.type = 'BUY_SHARE' THEN e.amount ELSE 0.00 END) AS total_shares,
               SUM(CASE WHEN e.type IN ('LOAN_DISBURSED', 'LOAN_DISBURSEMENT', 'LOAN_INTEREST') THEN e.amount
-                WHEN e.type = 'LOAN_PAYMENT' THEN -e.amount ELSE 0.00 END) AS remaining_loan,
+                WHEN e.type IN ('LOAN_PAYMENT', 'DISTRIBUTION_LOAN_OFFSET') THEN -e.amount ELSE 0.00 END) AS remaining_loan,
               SUM(CASE WHEN e.type = 'CHARGE_PENALTY' THEN e.amount
                 WHEN e.type = 'PENALTY_PAYMENT' THEN -e.amount ELSE 0.00 END) AS unpaid_penalties,
               SUM(CASE WHEN e.type IN ('CHARGE_CONTRIBUTION', 'CONTRIBUTION') THEN e.amount
@@ -137,7 +137,7 @@ class CycleMembersHandler {
           // Serialize enrollment with lifecycle changes and other enrollments.
           const cycle = await trx("cycles")
             .where({ group_id })
-            .whereIn("status", ["draft", "active", "distributing"])
+            .whereIn("status", ["draft", "active"])
             .orderBy("created_at", "desc")
             .orderBy("id", "desc")
             .forUpdate()

@@ -87,9 +87,9 @@ function fixture(t) {
         );
       }
       if (q.sql.includes('from "cycles"')) {
-        assert.deepEqual(q.bindings, ["1", "active", "distributing", 1]);
+        assert.deepEqual(q.bindings, ["1", "active", 1]);
         assert.match(q.sql, /for update/);
-        return state.cycle && ["active", "distributing"].includes(state.cycleStatus) ? { id: "20" } : undefined;
+        return state.cycle && ["active"].includes(state.cycleStatus) ? { id: "20" } : undefined;
       }
       if (q.sql.includes('from "cycle_members"')) {
         assert.deepEqual(q.bindings, ["11", "20", 1]);
@@ -403,7 +403,7 @@ test("loan vouchers require the group's current writable cycle", async t => {
     assert.equal(state.voucherCounter, "0");
   }
   state.cycleStatus = "distributing";
-  assert.equal((await post(input)).status, 201);
+  assert.equal((await post(input)).status, 409);
   assert.equal((await post({ ...input, document_number: 5 })).status, 400);
   assert.equal((await post({ ...input, document_type: "RECEIPT" })).status, 400);
 });

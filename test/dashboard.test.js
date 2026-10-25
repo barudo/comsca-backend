@@ -64,7 +64,7 @@ function fixture(t) {
       );
       assert.match(
         query.sql,
-        /SUM\(e\.amount\) FILTER \(WHERE e\.type = 'LOAN_PAYMENT'\)/,
+        /SUM\(e\.amount\) FILTER \(WHERE e\.type IN \('LOAN_PAYMENT', 'DISTRIBUTION_LOAN_OFFSET'\)\)/,
       );
       assert.match(
         query.sql,

@@ -123,7 +123,7 @@ class LoanDisbursementsHandler {
             fail("Credit must be an ASSET funding account");
           const cycle = await trx("cycles")
             .where({ group_id })
-            .whereIn("status", ["active", "distributing"])
+            .whereIn("status", ["active"])
             .orderBy("created_at", "desc")
             .orderBy("id", "desc")
             .forUpdate()

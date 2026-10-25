@@ -5,6 +5,11 @@ const serverless = require("serverless-http");
 const { createApp } = require("../src/app");
 
 function fixture(t) {
+  // Accounting is exercised against PostgreSQL in cycle-distributions.integration.test.js.
+  // These tests isolate the existing lifecycle/input contract.
+  const distributions = require('../src/services/cycle-distributions');
+  t.mock.method(distributions, 'declare', async () => ({ summary: {}, distributions: [] }));
+  t.mock.method(distributions, 'retrieve', async () => ({ summary: {}, distributions: [] }));
   const db = knex({ client: "pg" });
   t.after(() => db.destroy());
   const state = { role: "OWNER", group: 1, inserts: [], insertError: null, authError: null };
@@ -406,12 +411,14 @@ test("cycle creation and updates accept exact document counters", async t => {
   assert.equal(created.body.cycle.receipt_counter, "9007199254740993");
   assert.equal(created.body.cycle.disbursement_voucher_counter, "12");
   assert.equal(created.body.cycle.journal_voucher_counter, "0");
-  for (const status of ["draft", "active", "distributing"]) {
+  for (const status of ["draft", "active"]) {
     state.cycle.status = status;
     assert.equal((await put(counters)).status, 200);
     assert.equal((await put({ receipt_counter: "9223372036854775807" })).body.cycle.disbursement_voucher_counter, "12");
     assert.equal(state.cycle.receipt_counter, "9223372036854775807");
   }
+  state.cycle.status = "distributing";
+  assert.equal((await put(counters)).status, 409);
   state.cycle.status = "closed";
   assert.equal((await put(counters)).status, 409);
 });

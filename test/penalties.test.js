@@ -65,7 +65,6 @@ function fixture(t) {
           "1",
           "draft",
           "active",
-          "distributing",
           1,
         ]);
         assert.match(q.sql, /for update/);

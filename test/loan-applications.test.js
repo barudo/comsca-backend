@@ -39,7 +39,7 @@ function fixture(t) {
       return state.member ? { id: q.bindings[0] } : undefined;
     }
     if (table === "cycles") {
-      assert.deepEqual(q.bindings, ["1", "draft", "active", "distributing", 1]);
+      assert.deepEqual(q.bindings, q.sql.includes("for update") ? ["1", "draft", "active", 1] : ["1", "draft", "active", "distributing", 1]);
       return state.cycle ? { id: "20" } : undefined;
     }
     if (table === "cycle_members") {

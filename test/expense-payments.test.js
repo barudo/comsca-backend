@@ -37,7 +37,7 @@ function fixture(t) {
     assert.ok(builders.has(builder), "all payment operations must use the transaction");
     if (q.sql.includes('from "users"')) return q.bindings[1] === "1" ? { id: "1", role: state.role } : undefined;
     if (q.sql.includes('from "cycles"')) {
-      assert.deepEqual(q.bindings, ["1", "active", "distributing", 1]);
+      assert.deepEqual(q.bindings, ["1", "active", 1]);
       assert.match(q.sql, /for update/);
       return state.cycle ? { id: "20" } : undefined;
     }

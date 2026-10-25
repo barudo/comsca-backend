@@ -1,3 +1,4 @@
+const distributions = require("../services/cycle-distributions");
 const cycleColumns = ["id", "group_id", "interest_rate", "interest_period", "interest_method",
   "cost_per_share", "status", "created_at", "updated_at"];
 const detailFields = ["name", "description", "absence_penalty", "required_monthly_contribution",
@@ -148,7 +149,7 @@ class CyclesHandler {
 
   async update(request, response, next) {
     try {
-      const cycle = await request.app.locals.database.transaction(async trx => {
+      const result = await request.app.locals.database.transaction(async trx => {
         const actor = await trx("users").where({
           auth_user_id: request.authUser.id, group_id: request.group.id,
         }).forUpdate().first("id", "role");
@@ -168,25 +169,38 @@ class CyclesHandler {
         if (current.status === "closed") {
           throw Object.assign(new Error("Closed cycles are read-only"), { status: 409 });
         }
+        if (current.status === "distributing" && Object.keys(request.body || {}).some(key => key !== "status")) {
+          throw Object.assign(new Error("Declared cycle counters and settings are read-only"), { status: 409 });
+        }
         const values = cycleInput(request.body, current);
         const hasChanges = Object.keys(request.body).some(key => key !== "status");
         const nextStatus = { draft: "active", active: "distributing", distributing: "closed" }[current.status];
         if (values.status !== current.status && values.status !== nextStatus) {
           throw Object.assign(new Error("Invalid cycle status transition"), { status: 409 });
         }
-        if (!hasChanges && values.status === current.status) return current;
+        let distribution;
+        if (current.status === "distributing") {
+          distribution = await distributions.retrieve(trx, request.group.id, id, true);
+        } else if (current.status === "active" && values.status === "distributing") {
+          if (hasChanges) throw Object.assign(new Error("Declare distributions with a status-only request"), { status: 409 });
+          distribution = await distributions.declare(trx, current, actor);
+        }
+        if (!hasChanges && values.status === current.status) return { cycle: current, ...(distribution || {}) };
         const changes = Object.fromEntries(Object.keys(request.body).map(key => [key, values[key]]));
         const [updated] = await trx("cycles").where({ id, group_id: request.group.id })
           .update({ ...changes, updated_at: trx.raw("clock_timestamp()") }).returning(allCycleColumns);
-        return updated;
+        return { cycle: updated, ...(distribution || {}) };
       });
-      return response.json({ success: true, cycle });
+      return response.json({ success: true, ...result });
     } catch (error) {
       if (error.code === "23505" && error.constraint === "cycles_one_current_per_group") {
         return response.status(409).json({ success: false, error: "This group already has a current cycle" });
       }
       if ([400, 403, 404, 409].includes(error.status)) {
         return response.status(error.status).json({ success: false, error: error.message });
+      }
+      if (["22003", "23503", "23505", "23514", "40001", "40P01"].includes(error.code)) {
+        return response.status(409).json({ success: false, error: "Cycle distribution could not be committed; reconcile records and retry" });
       }
       return next(error);
     }

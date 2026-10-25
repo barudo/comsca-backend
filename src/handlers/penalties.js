@@ -103,7 +103,7 @@ class PenaltiesHandler {
           const input = penaltyInput(request.body);
           const cycle = await trx("cycles")
             .where({ group_id })
-            .whereIn("status", ["draft", "active", "distributing"])
+            .whereIn("status", ["draft", "active"])
             .orderBy("created_at", "desc")
             .orderBy("id", "desc")
             .forUpdate()

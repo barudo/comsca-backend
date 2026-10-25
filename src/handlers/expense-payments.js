@@ -61,7 +61,7 @@ class ExpensePaymentsHandler {
         }
         const input = parse(request.body);
         const cycle = await trx("cycles").where({ group_id })
-          .whereIn("status", ["active", "distributing"])
+          .whereIn("status", ["active"])
           .orderBy("created_at", "desc").orderBy("id", "desc").forUpdate().first("id");
         if (!cycle) fail("This group has no writable current cycle", 409);
         const ids = input.expenses.map(item => item.id);

@@ -125,7 +125,7 @@ class GroupAccountTransactionsHandler {
           const input = transactionInput(request.body, this.rules);
           const cycle = await trx("cycles")
             .where({ group_id })
-            .whereIn("status", ["active", "distributing"])
+            .whereIn("status", ["active"])
             .orderBy("created_at", "desc")
             .orderBy("id", "desc")
             .forUpdate()
