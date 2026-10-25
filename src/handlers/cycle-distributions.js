@@ -3,8 +3,9 @@ class CycleDistributionsHandler {
   async list(request, response, next) {
     try {
       const result = await request.app.locals.database.transaction(async trx => {
+        await trx.raw('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');
         const group_id = request.group.id;
-        const actor = await trx('users').where({ group_id, auth_user_id: request.authUser.id }).forShare().first('id', 'role');
+        const actor = await trx('users').where({ group_id, auth_user_id: request.authUser.id }).first('id', 'role');
         if (!actor || !['OWNER', 'ADMIN', 'TREASURER', 'AUDITOR'].includes(actor.role)) {
           throw Object.assign(new Error('A financial role in this group is required to read distributions'), { status: 403 });
         }

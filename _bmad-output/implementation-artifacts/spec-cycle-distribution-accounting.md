@@ -2,7 +2,7 @@
 title: 'Declare cycle distributions with balanced accounting'
 type: 'feature'
 created: '2026-10-25'
-status: 'in-review'
+status: 'done'
 baseline_commit: 'fc56795849bc4d8e80e6c34a6ea806824ecfa7c1'
 route: 'dispatch'
 review_loop_iteration: 0
@@ -70,8 +70,22 @@ User resolved the accounting gates and authorized the practical dispute choice; 
 
 ## Review Triage Log
 
+- medium, patched: retrieval used separate READ COMMITTED snapshots; now uses a read-only repeatable-read transaction, matching existing financial reports.
+- medium, patched: fallback BUY_SHARE classification could override explicit account roles; roles are authoritative and incompatible type/collectible classifications fail validation. Focused regression passes.
+- false as an existing-path defect: custom loans are not offset automatically; existing payment code explicitly restricts loan repayments to account 1100. Documented reconciliation requirement instead of guessing eligibility.
+- medium, patched: fully settled unsupported account movements were rejected before aggregation; zero net unsupported balances per member/account are now allowed.
+- medium, patched: no operational classification guidance existed; docs/cycle-distributions.md describes normal chart defaults, explicit roles and operator reconciliation, without adding an unrequested public management API.
+- medium, patched: equivalent-account tests added for alias reuse, conflicting reserved codes, duplicate equivalents and incompatible roles, with rollback assertions.
+- medium, patched: added actual void-versus-declaration races in both request orders; computed capital matches the winning operation. Every business write route also tested after declaration.
+- low, patched: added explicit closing, retrieval after closing and legacy distributing-without-declaration assertions.
+- One independent reviewer completed. The two additional reviewer agents hit provider usage limits; their passes were unavailable. Primary agent completed remaining code inspection and focused verification.
+
 ## Verification
 
 Focused allocation tests and real PostgreSQL distribution integration tests, plus directly affected cycle/metrics regressions. No unrelated full-suite runs. Verify git diff --check. Report migration, endpoint, calculation, accounting, assumptions and test results.
 
 Verification so far: 82 affected handler tests pass; allocation/member tests pass; real PostgreSQL distribution integration covers offsets, capped residual debt, blockers, loss, no cash movement, repeat/concurrent requests, rollback and all business write routes.
+
+Final verification: 82 existing affected handler tests, 3 allocation/classification tests, 4 member-balance tests and 3 dashboard tests pass. The focused PostgreSQL integration test also passes (93 tests total), covering real migrations, balanced journals, earnings/losses, capped loan deductions, blockers, void exclusions, RLS retrieval, concurrency, immutable audit rows, rollback, business route guards, account reuse and lifecycle compatibility. git diff --check passes. Full unrelated suite and production migration/deployment were not run.
+
+Implementation notes: latest user revision permits loans deducted from proceeds, while contributions/penalties block declaration. No dispute workflow or payouts were introduced. Local migration 037 creates declaration/member tables and account classification; required accounts are reused or created transactionally at declaration. Documentation: docs/cycle-distributions.md.

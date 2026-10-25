@@ -23,3 +23,11 @@ test('ledger rejects missing equity identity, negative loans, and member debts h
   assert.throws(() => analyzeLedger(members,[...base,row('ASSET','1400','5.00'),row('ASSET','1400','-5.00','2')]), /contributions/);
   assert.throws(() => analyzeLedger(members,[...base,row('ASSET','1100','-5.00'),row('ASSET','1000','5.00')]), /Negative loan/);
 });
+test('explicit account roles win over fallback codes and settled unsupported balances do not block', () => {
+  const members=[{user_id:'1'}];
+  const row=(account_id,type,amount,role=null,component_type='BUY_SHARE')=>({account_id,code:account_id,type,amount,distribution_role:role,component_type,user_id:'1',account_cycle_id:'1',cycle_id:'1'});
+  const base=[row('1000','ASSET','100.00'),row('3000','EQUITY','-100.00')];
+  assert.throws(()=>analyzeLedger(members,[base[0],{...base[1],distribution_role:'EARNINGS'}]),/Unsupported/);
+  assert.throws(()=>analyzeLedger(members,[...base,row('1100','ASSET','1.00','CASH'),row('1000','ASSET','-1.00')]),/incompatible/);
+  assert.equal(analyzeLedger(members,[...base,row('1900','ASSET','1.00'),row('1900','ASSET','-1.00')]).capital.get('1'),10000n);
+});

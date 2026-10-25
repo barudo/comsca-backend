@@ -128,4 +128,39 @@ test('distribution accounting: real constraints, loan offsets, blockers, concurr
   assert.equal((await db('cycle_distribution_declarations').where({cycle_id:rollback.cycle.id})).length,0);
   assert.equal(await rollback.balance('4300'),-100n);assert.equal(await rollback.balance('3000'),-10000n);
   await db.raw('DROP TRIGGER fail_distribution_test ON cycle_distributions; DROP FUNCTION fail_distribution_test()');
+  // Existing equivalent accounts are reused, and conflicting charts roll back.
+  const reuse=await fixture();await reuse.post('BUY_SHARE','10.00','1000','3000');
+  const [existingPayable]=await db('accounts').insert({group_id:reuse.group.id,cycle_id:reuse.cycle.id,code:'2110',name:'Member Distributions Payable',type:'LIABILITY'}).returning('*');
+  await db('accounts').insert({group_id:reuse.group.id,cycle_id:reuse.cycle.id,code:'3110',name:'Distributable Earnings',type:'EQUITY'});
+  const reused=await reuse.invoke();assert.equal(reused.statusCode,200);assert.equal(reused.body.distributions[0].payable_account_id,existingPayable.id);
+  assert.equal((await db('accounts').where({cycle_id:reuse.cycle.id}).whereIn('code',['2100','3100'])).length,0);
+  for(const collision of ['reserved','duplicate','role']) {
+    const c=await fixture();await c.post('BUY_SHARE','10.00','1000','3000');
+    if(collision==='reserved') await db('accounts').insert({group_id:c.group.id,cycle_id:c.cycle.id,code:'2100',name:'Other liability',type:'LIABILITY'});
+    if(collision==='duplicate') await db('accounts').insert(['2110','2120'].map(code=>({group_id:c.group.id,cycle_id:c.cycle.id,code,name:'Member Distribution Payable',type:'LIABILITY'})));
+    if(collision==='role') await db('accounts').insert({group_id:c.group.id,cycle_id:c.cycle.id,code:'3100',name:'Retained Earnings',type:'EQUITY',distribution_role:'MEMBER_CAPITAL'});
+    assert.equal((await c.invoke()).statusCode,409);
+    assert.equal((await db('cycle_distribution_declarations').where({cycle_id:c.cycle.id})).length,0);
+    assert.equal((await db('cycles').where({id:c.cycle.id}).first()).status,'active');
+  }
+  assert.equal((await f.invoke(new Cycles(),'update',f.request({status:'closed'}))).statusCode,200);
+  const closed=await f.invoke(new Distributions(),'list');assert.equal(closed.body.cycle.status,'closed');assert.equal(closed.body.summary.net_distribution,'720.00');
+  // A real void racing declaration must either be included or be refused.
+  for (const voidFirst of [true,false]) {
+    const race=await fixture();
+    const source=await race.post('BUY_SHARE','100.00','1000','3000');
+    await race.post('BUY_SHARE','100.00','1000','3000',race.users[1].id);
+    const req=race.request();req.params.transactionId=source.id;
+    const operations=voidFirst ? [race.invoke(new Transactions(),'void',req),race.invoke()] : [race.invoke(),race.invoke(new Transactions(),'void',req)];
+    const responses=await Promise.all(operations);
+    const vr=responses[voidFirst?0:1], dr=responses[voidFirst?1:0];
+    assert.equal(dr.statusCode,200);
+    assert.ok([200,409].includes(vr.statusCode));
+    assert.equal(dr.body.summary.total_capital,vr.statusCode===200?'100.00':'200.00');
+    assert.equal((await db('cycle_distributions').where({cycle_id:race.cycle.id})).length,3);
+  }
+  const legacy=await fixture();await db('cycles').where({id:legacy.cycle.id}).update({status:'distributing'});
+  assert.equal((await legacy.invoke()).statusCode,409);assert.equal((await legacy.invoke(new Distributions(),'list')).statusCode,409);
+  assert.equal((await db('cycle_distribution_declarations').where({cycle_id:legacy.cycle.id})).length,0);
+
 });

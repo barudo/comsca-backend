@@ -30,6 +30,7 @@ function analyzeLedger(members, postings) {
   const receivables = new Map();
   const loans = new Map();
   const balances = new Map();
+  const unsupported = new Map();
   let cash = 0n;
   let ledgerTotal = 0n;
   for (const posting of postings) {
@@ -41,8 +42,16 @@ function analyzeLedger(members, postings) {
     account.balance += amount;
     balances.set(accountId, account);
     if (posting.account_cycle_id !== null && String(posting.account_cycle_id) !== String(posting.cycle_id)) fail('Ledger account cycle is inconsistent');
+    const role = posting.distribution_role;
+    const roleTypes = { MEMBER_CAPITAL: 'EQUITY', EARNINGS: 'EQUITY', DISTRIBUTION_PAYABLE: 'LIABILITY', CASH: 'ASSET', RECEIVABLE: 'ASSET' };
+    if (role && roleTypes[role] !== posting.type) fail('Account distribution role conflicts with its type');
+    if (posting.type === 'ASSET' && ['1100', '1300', '1400'].includes(posting.code) && role && role !== 'RECEIVABLE') fail('Collectible account has an incompatible distribution role');
     if (posting.type === 'EQUITY') {
-      if (posting.distribution_role !== 'MEMBER_CAPITAL' && posting.component_type !== 'BUY_SHARE') fail('Unsupported equity balance; identify refundable member capital before declaration');
+      if (!(role === 'MEMBER_CAPITAL' || (!role && posting.component_type === 'BUY_SHARE'))) {
+        const key = `${member}:${accountId}`;
+        unsupported.set(key, (unsupported.get(key) || 0n) + amount);
+        continue;
+      }
       if (!capital.has(member)) fail('Capital has missing or ineligible member attribution');
       const key = `${member}:${accountId}`;
       const part = capitalAccounts.get(key) || { user_id: member, account_id: accountId, amount: 0n };
@@ -52,7 +61,11 @@ function analyzeLedger(members, postings) {
     } else if (posting.type === 'ASSET') {
       if (posting.distribution_role === 'CASH' || (!posting.distribution_role && posting.code === '1000')) cash += amount;
       else {
-        if (posting.distribution_role !== 'RECEIVABLE' && !['1100', '1300', '1400'].includes(posting.code)) fail('Unsupported asset balance; identify cash or collectibles before declaration');
+        if (role !== 'RECEIVABLE' && !['1100', '1300', '1400'].includes(posting.code)) {
+          const key = `${member}:${accountId}`;
+          unsupported.set(key, (unsupported.get(key) || 0n) + amount);
+          continue;
+        }
         if (!capital.has(member)) fail('Receivable has missing or ineligible member attribution');
         const key = `${member}:${accountId}`;
         const target = posting.code === '1100' ? loans : receivables;
@@ -63,6 +76,7 @@ function analyzeLedger(members, postings) {
     } else if (!['INCOME', 'EXPENSE', 'LIABILITY'].includes(posting.type)) fail('Unsupported ledger account type');
   }
   if (ledgerTotal !== 0n) fail('Cycle ledger is unbalanced');
+  if ([...unsupported.values()].some(amount => amount !== 0n)) fail('Unsupported asset or equity balance; reconcile account classification before declaration');
   if ([...receivables.values()].some(part => part.amount !== 0n)) fail('Outstanding contributions, penalties or unsupported collectibles must be reconciled before declaration');
   if ([...loans.values()].some(part => part.amount < 0n)) fail('Negative loan balances require reconciliation');
   if ([...capitalAccounts.values()].some(part => part.amount < 0n)) fail('Negative member capital balance requires reconciliation');
