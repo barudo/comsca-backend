@@ -1,3 +1,4 @@
+const MemberPayoutsHandler = require("../handlers/member-payouts");
 const CycleDistributionsHandler = require("../handlers/cycle-distributions");
 const express = require("express");
 const authenticate = require("../middleware/authenticate");
@@ -36,6 +37,7 @@ const SupabaseAuthHandler = require("../handlers/supabase-auth");
 function createRouter(database) {
   const router = express.Router();
   const cycles = new CyclesHandler();
+  const memberPayouts = new MemberPayoutsHandler();
   const cycleDistributions = new CycleDistributionsHandler();
   const cycleAccounts = new CycleAccountsHandler();
   const accountingAccounts = new AccountingAccountsHandler();
@@ -246,6 +248,8 @@ function createRouter(database) {
   router.get("/api/v1/me/loans/apply", authenticate, loanApplications.latestMe.bind(loanApplications));
   router.post("/api/v1/cycles", authenticate, cycles.create.bind(cycles));
   router.get("/api/v1/cycles/:cycleId/distributions", authenticate, cycleDistributions.list.bind(cycleDistributions));
+  router.post("/api/v1/cycles/:cycleId/payouts", authenticate, memberPayouts.create.bind(memberPayouts));
+  router.get("/api/v1/cycles/:cycleId/payouts", authenticate, memberPayouts.list.bind(memberPayouts));
   router.put("/api/v1/cycles/:id", authenticate, cycles.update.bind(cycles));
   router.patch("/api/v1/cycles/:id", authenticate, cycles.update.bind(cycles));
   // The legacy username/password login still requires a resolved group.

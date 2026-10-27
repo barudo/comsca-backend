@@ -132,7 +132,7 @@ async function retrieve(trx, group_id, cycle_id, required = false) {
     return { summary: null, distributions: [] };
   }
   const distributions = await trx('cycle_distributions').where({ group_id, cycle_id }).orderBy('user_id').select('*');
-  return { summary: { ...declaration.summary, members: distributions.map(row => ({ user_id: row.user_id, capital: row.capital_amount, earnings: row.earnings_amount, gross_distribution: row.gross_amount, loan_deduction: row.loan_deduction, contribution_deduction: row.contribution_deduction, penalty_deduction: row.penalty_deduction, net_distribution: row.net_amount, paid_amount: row.paid_amount, status: row.status })) }, distributions, closing_transaction_ids: declaration.closing_transaction_ids,
+  return { summary: { ...declaration.summary, total_paid: decimal(distributions.reduce((sum, row) => sum + cents(row.paid_amount), 0n)), members: distributions.map(row => ({ user_id: row.user_id, capital: row.capital_amount, earnings: row.earnings_amount, gross_distribution: row.gross_amount, loan_deduction: row.loan_deduction, contribution_deduction: row.contribution_deduction, penalty_deduction: row.penalty_deduction, net_distribution: row.net_amount, paid_amount: row.paid_amount, status: row.status })) }, distributions, closing_transaction_ids: declaration.closing_transaction_ids,
     declared_at: declaration.created_at, declared_by: declaration.declared_by };
 }
 
