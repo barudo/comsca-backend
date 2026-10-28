@@ -8,3 +8,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-accounting-income-statement-endpoint.md`
   summary: Configure a required PostgreSQL integration-test gate for accounting statement SQL.
   evidence: The income-statement aggregation has disposable-PostgreSQL coverage, but it skips without TEST_DATABASE_URL; the repository has no CI workflow to provision the database, so making that verification mandatory requires separate test-infrastructure work.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-member-payouts.md`
+  summary: Repair 13 pre-existing donation and expense request-test failures.
+  evidence: Full suite has the same 13 failures on original revision 9c87ae26e0162795a8d7a83f88c40b8c46accd59 and payout revision; isolated baseline checkout confirms unrelated to member payouts.

@@ -2,7 +2,7 @@
 title: 'Record and retrieve member payouts'
 type: 'feature'
 created: '2026-10-28'
-status: 'in-progress'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: '9c87ae26e0162795a8d7a83f88c40b8c46accd59'
@@ -51,11 +51,11 @@ context: ['docs/project-context.md']
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `migrations/038_create_member_payouts.js` -- introduce payout audit table, group RLS/read grants, composite group/cycle/member/transaction/account foreign keys, unique cycle/key constraint and positive amount checks. Add controlled paid-state updates while protecting all entitlement fields; retain immutable payout rows. Guard downgrade against loss of payout data and restore prior checks/triggers when empty.
-- [ ] `src/handlers/member-payouts.js` -- implement strict validation and transactional create/list. Lock cycle before checking status, replay and balances, then distribution and accounts. Scope member by declared distribution. Cash must be same-cycle ASSET with explicit CASH role or unclassified code 1000, never known receivable codes. Validate stored payable as same-cycle LIABILITY/DISTRIBUTION_PAYABLE. Atomic journal, entries, postings, payout row and paid-state update; status pending/partial/paid. Return success, payout, updated distribution and transaction on write; success, cycle, payouts on GET.
-- [ ] `src/routes/index.js`, `src/services/cycle-distributions.js` -- wire routes and update live total_paid in retrieval.
-- [ ] `test/member-payouts.test.js`, `test/member-payouts.integration.test.js` -- exercise matrix through handler/HTTP and real PostgreSQL constraints, including isolation, idempotency, concurrency and rollback. Verify ledger cash/payable totals and unchanged declaration amounts.
-- [ ] `docs/cycle-distributions.md`, `README.md` -- explain request/response, permissions, partial payments, replay rules, lifecycle and migration requirement.
+- [x] `migrations/038_create_member_payouts.js` -- introduce payout audit table, group RLS/read grants, composite group/cycle/member/transaction/account foreign keys, unique cycle/key constraint and positive amount checks. Add controlled paid-state updates while protecting all entitlement fields; retain immutable payout rows. Guard downgrade against loss of payout data and restore prior checks/triggers when empty.
+- [x] `src/handlers/member-payouts.js` -- implement strict validation and transactional create/list. Lock cycle before checking status, replay and balances, then distribution and accounts. Scope member by declared distribution. Cash must be same-cycle ASSET with explicit CASH role or unclassified code 1000, never known receivable codes. Validate stored payable as same-cycle LIABILITY/DISTRIBUTION_PAYABLE. Atomic journal, entries, postings, payout row and paid-state update; status pending/partial/paid. Return success, payout, updated distribution and transaction on write; success, cycle, payouts on GET.
+- [x] `src/routes/index.js`, `src/services/cycle-distributions.js` -- wire routes and update live total_paid in retrieval.
+- [x] `test/member-payouts.test.js`, `test/member-payouts.integration.test.js` -- exercise matrix through handler/HTTP and real PostgreSQL constraints, including isolation, idempotency, concurrency and rollback. Verify ledger cash/payable totals and unchanged declaration amounts.
+- [x] `docs/cycle-distributions.md`, `README.md` -- explain request/response, permissions, partial payments, replay rules, lifecycle and migration requirement.
 
 **Acceptance Criteria:**
 - Given a declared cycle, when partial then final payouts occur, then paid amounts and statuses reconcile with cash/payable postings and distribution retrieval reports current total_paid.
@@ -70,8 +70,28 @@ User's explicit instruction to suggest and implement authorizes proceeding throu
 
 ## Review Triage Log
 
+| Finding | Verdict | Evidence / disposition |
+|---|---|---|
+| Blind: payout insert without progress update | low | Direct owner SQL can bypass reconciliation by omitting the progress update, but the only application payout writer performs both atomically. No API path commits this state. Additional database-owner misuse protection rejected as low likelihood and extra trigger complexity. |
+| Blind: initial nonzero paid state | low | Direct owner inserts can create inconsistent progress; declaration service always inserts zero/pending and no API accepts distribution records. Additional privileged-SQL protection rejected as low likelihood and added complexity. |
+| Blind: actor identity absent from payout | low | Recipient and transaction identity are retained; authenticated operator attribution is an optional audit enhancement, not a failure of payout or history behavior. Rejected because it adds schema/API surface beyond the payment contract without a demonstrated incorrect result. |
+| Blind: upgrade of existing declarations untested | medium | Patched test downgrades a populated declaration with no payouts, reapplies 038, checks unchanged declarations/entitlements, then pays it successfully. |
+| Blind: successful empty-history rollback untested | medium | Patched test verifies rollback with unpaid declarations, immutable trigger restoration and reapplication. |
+| Blind: HTTP success and replay untested | medium | Patched authenticated HTTP creation/replay test verifies 201/200, matching payout ID and exactly two postings. |
+| Blind: account classification branches untested | medium | Patched explicit custom CASH success, unclassified custom rejection, CASH-tagged receivable rejection and invalid payable rejection. |
+| Verification: explicit CASH funding eligibility unverified | medium | Same test gap as above; fixed and executed successfully against PostgreSQL 17. |
+
+Edge-case reviewer returned no findings. All three independent review layers completed. Implementation agent became unavailable due to a usage limit; parent completed the patches and verification.
+
 ## Verification
 
 - Run targeted payout and distribution tests with TEST_DATABASE_URL pointing only to a newly initialized temporary local PostgreSQL instance.
 - Run `npm test`; confirm existing tests pass and report environment-dependent skips.
 - Inspect full diff and run `git diff --check`.
+
+### Completed verification
+
+- Targeted payout and distribution tests: 7 passed, 0 failed, 0 skipped, including real PostgreSQL 17 accounting, concurrency, rollback, RLS and migration checks in a disposable Docker container.
+- Full `npm test`: 191 passed, 13 failed, 8 skipped. Verified the same 13 donation/expense failures on baseline revision in an isolated checkout (189 passed, 13 failed, 7 skipped); no new suite failures.
+- `git diff --check` passed. Configured and production databases were not changed.
+- Parent completed documentation, write-role locking and test corrections after the implementation subagent stopped. User committed initial implementation as c92ca25 while this work was ongoing; preserved that commit.

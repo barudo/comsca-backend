@@ -17,7 +17,9 @@ function parse(body) {
   return { user_id, credit, amount: decimal(amount), idempotency_key: body.idempotency_key };
 }
 async function authorize(trx, request, read = false) {
-  const actor = await trx('users').where({ group_id: request.group.id, auth_user_id: request.authUser.id }).first('id', 'role');
+  const query = trx('users').where({ group_id: request.group.id, auth_user_id: request.authUser.id });
+  if (!read) query.forShare();
+  const actor = await query.first('id', 'role');
   if (!actor || !['OWNER', 'ADMIN', 'TREASURER', ...(read ? ['AUDITOR'] : [])].includes(actor.role)) fail('A financial role in this group is required', 403);
 }
 function handleError(error, response, next) {

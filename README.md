@@ -1617,3 +1617,23 @@ Invalid input returns 400; insufficient role returns 403; accounts absent
 from the selected group or a user not enrolled in its current cycle return 404.
 Missing current cycle or a concurrent integrity conflict returns 409 with no partial
 writes.
+
+
+### Member payout endpoints
+
+`POST /api/v1/cycles/:cycleId/payouts` records a partial or full payment of declared member proceeds, only during `distributing`. Requires OWNER/ADMIN/TREASURER, bearer authentication and `x-group-slug`.
+
+```json
+{
+  "user_id": "5",
+  "credit": "12",
+  "amount": "250.00",
+  "idempotency_key": "cycle-1-member-5-payment-1"
+}
+```
+
+`credit` selects the cycle cash account; the payable debit is derived automatically. Returns 201 with `success`, `payout`, updated `distribution` and `transaction`. Reuse the same key and payload for a safe retry (200); use a new key for a new payment. Conflicting keys, overpayments, insufficient cash and writes outside distributing return 409.
+
+`GET /api/v1/cycles/:cycleId/payouts` returns `success`, `cycle` and `payouts`, ordered by ID. Also permits AUDITOR and remains available after closing.
+
+Migration 038 is required. See [cycle distribution and payout documentation](docs/cycle-distributions.md) for the full contract and errors.
