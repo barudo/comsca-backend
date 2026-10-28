@@ -49,3 +49,5 @@ Use a distinct `idempotency_key` for each intended payment and reuse it when ret
 Errors: 400 malformed input or unsuitable account classification; 401 missing/invalid authentication; 403 unauthorized role; 404 missing or foreign cycle/member/account; 409 wrong lifecycle, overpayment, insufficient cash or conflicting retry. Concurrent requests cannot exceed entitlement or cash. There is no payout edit/delete/void endpoint.
 
 Distribution retrieval now derives `summary.total_paid` from current member payment progress. The declaration's `cash_available`, `cash_shortfall`, `warnings` and entitlement totals remain snapshots at declaration time, not live cash reports. Closing still records manager confirmation without checking all payouts are complete.
+
+Each `summary.members` and `distributions` entry includes `user: { id, first_name, family_name, username }`, alongside `user_id`. Profiles reflect current user information; declaration amounts remain unchanged. No password or authentication identifiers are included.

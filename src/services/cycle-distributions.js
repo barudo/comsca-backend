@@ -131,8 +131,12 @@ async function retrieve(trx, group_id, cycle_id, required = false) {
     if (required) fail('This cycle has no stored distribution declaration; manual reconciliation is required');
     return { summary: null, distributions: [] };
   }
-  const distributions = await trx('cycle_distributions').where({ group_id, cycle_id }).orderBy('user_id').select('*');
-  return { summary: { ...declaration.summary, total_paid: decimal(distributions.reduce((sum, row) => sum + cents(row.paid_amount), 0n)), members: distributions.map(row => ({ user_id: row.user_id, capital: row.capital_amount, earnings: row.earnings_amount, gross_distribution: row.gross_amount, loan_deduction: row.loan_deduction, contribution_deduction: row.contribution_deduction, penalty_deduction: row.penalty_deduction, net_distribution: row.net_amount, paid_amount: row.paid_amount, status: row.status })) }, distributions, closing_transaction_ids: declaration.closing_transaction_ids,
+  const rows = await trx('cycle_distributions').where({ group_id, cycle_id }).orderBy('user_id').select('*');
+  const users = rows.length ? await trx('users').where({ group_id }).whereIn('id', rows.map(row => row.user_id))
+    .select('id', 'first_name', 'family_name', 'username') : [];
+  const usersById = new Map(users.map(user => [String(user.id), user]));
+  const distributions = rows.map(row => ({ ...row, user: usersById.get(String(row.user_id)) ?? null }));
+  return { summary: { ...declaration.summary, total_paid: decimal(distributions.reduce((sum, row) => sum + cents(row.paid_amount), 0n)), members: distributions.map(row => ({ user_id: row.user_id, user: row.user, capital: row.capital_amount, earnings: row.earnings_amount, gross_distribution: row.gross_amount, loan_deduction: row.loan_deduction, contribution_deduction: row.contribution_deduction, penalty_deduction: row.penalty_deduction, net_distribution: row.net_amount, paid_amount: row.paid_amount, status: row.status })) }, distributions, closing_transaction_ids: declaration.closing_transaction_ids,
     declared_at: declaration.created_at, declared_by: declaration.declared_by };
 }
 

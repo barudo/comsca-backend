@@ -63,6 +63,13 @@ test('distribution accounting: real constraints, loan offsets, blockers, concurr
   for(const r of concurrent) assert.equal(r.statusCode,200,JSON.stringify(r.body));
   const result=concurrent[0].body;
   assert.equal(result.cycle.status,'distributing');
+  const expectedUsers = f.users.map(({id, first_name, family_name, username}) => ({id, first_name, family_name, username}));
+  assert.deepEqual(result.summary.members.map(member => member.user), expectedUsers);
+  assert.deepEqual(result.distributions.map(row => row.user), expectedUsers);
+  const retrieved = await f.invoke(new Distributions(),'list');
+  assert.deepEqual(retrieved.body.summary.members.map(member => member.user), expectedUsers);
+  assert.deepEqual(retrieved.body.distributions.map(row => row.user), expectedUsers);
+
   assert.equal(result.summary.total_capital,'600.00'); assert.equal(result.summary.net_earnings,'170.00');
   assert.equal(result.summary.total_deductions,'50.00'); assert.equal(result.summary.net_distribution,'720.00');
   assert.deepEqual(result.distributions.map(r=>r.earnings_amount),['28.33','56.67','85.00']);
