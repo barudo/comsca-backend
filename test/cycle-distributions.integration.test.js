@@ -69,6 +69,15 @@ test('distribution accounting: real constraints, loan offsets, blockers, concurr
   const retrieved = await f.invoke(new Distributions(),'list');
   assert.deepEqual(retrieved.body.summary.members.map(member => member.user), expectedUsers);
   assert.deepEqual(retrieved.body.distributions.map(row => row.user), expectedUsers);
+  const storedDeclaration = await db('cycle_distribution_declarations').where({cycle_id:f.cycle.id}).first();
+  const storedDistributions = await db('cycle_distributions').where({cycle_id:f.cycle.id}).orderBy('user_id');
+  await db('users').where({group_id:f.group.id,id:f.users[0].id}).update({first_name:'Updated'});
+  const refreshed = await f.invoke(new Distributions(),'list');
+  assert.equal(refreshed.body.summary.members[0].user.first_name,'Updated');
+  assert.equal(refreshed.body.distributions[0].user.first_name,'Updated');
+  assert.deepEqual(await db('cycle_distribution_declarations').where({cycle_id:f.cycle.id}).first(), storedDeclaration);
+  assert.deepEqual(await db('cycle_distributions').where({cycle_id:f.cycle.id}).orderBy('user_id'), storedDistributions);
+
 
   assert.equal(result.summary.total_capital,'600.00'); assert.equal(result.summary.net_earnings,'170.00');
   assert.equal(result.summary.total_deductions,'50.00'); assert.equal(result.summary.net_distribution,'720.00');
