@@ -4,7 +4,7 @@ const serverless = require("serverless-http");
 const { createApp } = require("../src/app");
 const { createMemberAccount } = require("../src/services/member-account");
 
-function fixture() {
+function fixture(useProvider = false) {
   const actorId = "11111111-1111-4111-8111-111111111111";
   const accountId = "22222222-2222-4222-8222-222222222222";
   const state = { role: "OWNER", target: { id: "20", group_id: "1", phone: "+639171234567", auth_user_id: null, role: "MEMBER" },
@@ -25,6 +25,7 @@ function fixture() {
     createMemberAccount: async input => {
       state.calls.push(input);
       if (state.providerError) throw state.providerError;
+      if (useProvider) await createMemberAccount(input);
       if (state.link) state.target.auth_user_id = accountId;
       return { id: accountId };
     },
@@ -69,7 +70,7 @@ test("account provisioning rejects unauthorized callers and invalid targets befo
   for (const id of ["0", "-1", "abc", "1.2", "9223372036854775808"]) {
     assert.equal((await post(undefined, `/api/v1/groups/users/${id}/account`)).status, 400);
   }
-  for (const body of [null, [], {}, { password: 123 }, { password: "short" }, { password: "é".repeat(37) },
+  for (const body of [null, [], { password: null }, { password: 123 }, { password: "short" }, { password: "é".repeat(37) },
     { password: "initial-password", phone: "+639181234567" }, { password: "initial-password", role: "OWNER" }]) {
     assert.equal((await post(body)).status, 400);
   }
@@ -132,4 +133,62 @@ test("Supabase admin provisioning confirms the phone without public signup or us
   await assert.rejects(createMemberAccount(input), { status: 502 });
   delete process.env.SUPABASE_SERVICE_ROLE_KEY;
   await assert.rejects(createMemberAccount(input), { status: 503 });
+});
+
+
+test("blank or omitted member passwords are generated and returned only on confirmed success", async () => {
+  const passwords = new Set();
+  for (const body of [{}, {password:""}, {password:"  \t\n"}]) {
+    const {state,post} = fixture();
+    const result = await post(body);
+    assert.equal(result.status,201);
+    assert.equal(result.headers['cache-control'],'no-store');
+    assert.match(result.body.generated_password,/^[A-Za-z0-9_-]{32}Aa1!$/);
+    assert.equal(state.calls[0].password,result.body.generated_password);
+    passwords.add(result.body.generated_password);
+    const retry = await post(body);
+    assert.equal(retry.status,409);
+    assert.equal(Object.hasOwn(retry.body,'generated_password'),false);
+    assert.equal(state.calls.length,1);
+  }
+  assert.equal(passwords.size,3);
+  for (const scenario of ['unauthorized','provider','link']) {
+    const {state,post} = fixture();
+    if (scenario === 'unauthorized') state.role='MEMBER';
+    if (scenario === 'provider') state.providerError=Object.assign(new Error('Provisioning failed'),{status:502});
+    if (scenario === 'link') state.link=false;
+    const result=await post({password:''});
+    assert.equal(result.status,scenario==='unauthorized'?403:502);
+    assert.equal(Object.hasOwn(result.body,'generated_password'),false);
+  }
+});
+
+test("nonblank member passwords preserve leading and trailing spaces", async () => {
+  const {state,post}=fixture();
+  const password='  given-password  ';
+  const result=await post({password});
+  assert.equal(result.status,201);
+  assert.equal(state.calls[0].password,password);
+  assert.equal(Object.hasOwn(result.body,'generated_password'),false);
+});
+
+
+test("generated response password matches the actual Auth request payload", async t => {
+  const names=['SUPABASE_URL','SUPABASE_SERVICE_ROLE_KEY'];
+  const old=names.map(name=>process.env[name]);
+  t.after(()=>names.forEach((name,i)=>{if(old[i]===undefined) delete process.env[name]; else process.env[name]=old[i];}));
+  process.env.SUPABASE_URL='https://example.supabase.co';
+  process.env.SUPABASE_SERVICE_ROLE_KEY='server-only-test-key';
+  let sent;
+  t.mock.method(globalThis,'fetch',async (url,options)=>{
+    assert.equal(url,'https://example.supabase.co/auth/v1/admin/users');
+    sent=JSON.parse(options.body);
+    return {ok:true,status:200,json:async()=>({id:'22222222-2222-4222-8222-222222222222',phone:'639171234567',phone_confirmed_at:'2026-10-29T00:00:00Z'})};
+  });
+  const {post}=fixture(true);
+  const result=await post({password:''});
+  assert.equal(result.status,201);
+  assert.equal(sent.password,result.body.generated_password);
+  assert.match(sent.password,/^[A-Za-z0-9_-]{32}Aa1!$/);
+  assert.equal(sent.phone,'+639171234567');
 });

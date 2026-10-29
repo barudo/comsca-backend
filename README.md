@@ -1248,8 +1248,9 @@ Content-Type: application/json
 { "password": "initial-password" }
 ```
 
-The password must contain at least 8 characters and at most 72 UTF-8 bytes, and
-meet the project's Supabase password policy. Other body fields are rejected.
+Send `{ "password": "" }`, a whitespace-only password, or `{}` to generate a secure random password. On successful provisioning, the response additionally includes `generated_password`; display it to the owner/admin so they can give it to the member. It is not returned by later reads or retries, and the response uses `Cache-Control: no-store`. No OTP or password delivery is performed automatically.
+
+A supplied nonblank password must contain at least 8 characters and at most 72 UTF-8 bytes, and meet the project's Supabase password policy. It is passed unchanged and is never echoed back. Null/non-string passwords, non-object bodies and other body fields are rejected.
 The member must already have a saved `+639…` phone number. The endpoint uses
 Supabase's server-only [Admin createUser API](https://supabase.com/docs/reference/javascript/auth-admin-createuser)
 with `phone_confirm: true`: no OTP or invitation is sent. The administrator is
@@ -1271,14 +1272,14 @@ Rollback removes the provisioning trigger without deleting existing accounts or 
 
 Returns `201` with `{ "success": true, "user": { "id": "20", "group_id": "1",
 "phone": "+639171234567", "role": "MEMBER", "has_login": true,
-"phone_verified": true } }`. Passwords, Auth IDs, and session tokens are excluded.
+"phone_verified": true } }`. When generated, the password is also returned in the top-level `generated_password` field. Supplied passwords, Auth IDs, and session tokens are excluded.
 Returns `400` for invalid input/missing phone, `401` for invalid authentication,
 `403` for insufficient group permissions, `404` for a target outside the group or
 a missing target, and `409` for existing login access or a phone already in Auth.
 Existing Auth accounts are never adopted or reset. Missing migration/configuration
 returns `503`; provider errors return `429` or `502`.
 If a response is lost after Auth commits, retrying returns `409` because the link
-already exists; the original password remains in effect.
+already exists; the original password remains in effect. A generated password cannot be recovered through this endpoint. The member can instead sign in with the existing phone OTP request/verify endpoints, then use the returned access token with `PUT /api/v1/users/me/password` and `{ "new_password": "...", "repeat_new_password": "..." }` to set a password they know. If OTP delivery is unavailable, an authorized Auth operator must recover access outside this endpoint.
 
 ## AWS Lambda
 
