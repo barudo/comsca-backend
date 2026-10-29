@@ -55,6 +55,8 @@ test('member payouts: accounting, HTTP isolation, retries, concurrency, constrai
   const Payouts = require('../src/handlers/member-payouts');
   const handler = new Payouts();
   const f = await fixture();
+  const me = new (require('../src/handlers/me-payouts'))();
+  assert.deepEqual((await f.invoke(me,'get')).body, {success:true,cycle:null,distribution:null});
   const body = (key, amount='25.00', user=f.users[0].id) => ({user_id:user, credit:f.byCode['1000'], amount, idempotency_key:key});
   const pay = input => f.invoke(handler,'create',f.request(input));
   const read = () => f.invoke(handler,'list');
@@ -66,6 +68,10 @@ test('member payouts: accounting, HTTP isolation, retries, concurrency, constrai
   await f.post('BUY_SHARE','100.00','1000','3000');
   await f.post('BUY_SHARE','100.00','1000','3000',f.users[1].id);
   assert.equal((await f.invoke()).statusCode,200);
+  const unpaid = (await f.invoke(me,'get')).body.distribution;
+  assert.equal(unpaid.status,'pending');
+  assert.equal(unpaid.paid_amount,'0.00');
+  assert.equal(unpaid.remaining_amount,'100.00');
   const original = await db('cycle_distribution_declarations').where({cycle_id:f.cycle.id}).first();
   const distributions = await db('cycle_distributions').where({cycle_id:f.cycle.id}).orderBy('id');
   const payable = distributions[0].payable_account_id;
@@ -149,6 +155,32 @@ test('member payouts: accounting, HTTP isolation, retries, concurrency, constrai
   assert.equal((await http('GET',f.users[2])).statusCode,200);
   assert.equal((await http('POST',f.users[2])).statusCode,403);
   assert.equal((await http('POST',f.users[0],f.group,{...body('bad'),debit:payable})).statusCode,400);
+  const meHttp = async (actor,group=f.group,query='') => app({version:'2.0',rawPath:'/api/v1/me/payouts',rawQueryString:query,
+    headers:{...(actor ? {authorization:`Bearer ${actor.auth_user_id}`} : {}),'x-group-slug':group.slug},
+    requestContext:{http:{method:'GET',sourceIp:'127.0.0.1'}}},{});
+  assert.equal((await meHttp(null)).statusCode,401);
+  const activeMe = await meHttp(foreign.users[1],foreign.group);
+  assert.equal(activeMe.statusCode,200);
+  assert.deepEqual(JSON.parse(activeMe.body),{success:true,cycle:null,distribution:null});
+  const fullyPaid = JSON.parse((await meHttp(f.users[0])).body).distribution;
+  assert.equal(fullyPaid.status,'paid');
+  assert.equal(fullyPaid.paid_amount,'100.00');
+  assert.equal(fullyPaid.remaining_amount,'0.00');
+  assert.equal((await meHttp(foreign.users[0])).statusCode,403);
+  const own = await meHttp(f.users[1],f.group,`user_id=${f.users[0].id}&cycle_id=${foreign.cycle.id}`);
+  assert.equal(own.statusCode,200,own.body);
+  const ownBody = JSON.parse(own.body);
+  assert.equal(ownBody.distribution.user_id,f.users[1].id);
+  assert.equal(ownBody.distribution.paid_amount,'15.00');
+  assert.equal(ownBody.distribution.remaining_amount,'85.00');
+  assert.deepEqual(Object.keys(ownBody).sort(),['cycle','distribution','success']);
+  assert.deepEqual(Object.keys(ownBody.distribution.user).sort(),['family_name','first_name','id','username']);
+  const [newMember] = await db('users').insert({group_id:f.group.id,username:'new-member',first_name:'New',family_name:'Member',email:'new@example.test',password:'secret',auth_user_id:'new-auth',role:'MEMBER'}).returning('*');
+  const missing = JSON.parse((await meHttp(newMember)).body);
+  assert.equal(missing.cycle.id,f.cycle.id);
+  assert.equal(missing.distribution,null);
+  await db('cycles').where({id:foreign.cycle.id}).update({status:'distributing'});
+  assert.equal((await meHttp(foreign.users[0],foreign.group)).statusCode,409);
   const payouts=(await read()).body.payouts;
   assert.deepEqual(payouts.map(p=>p.id),[...payouts].sort((a,b)=>Number(a.id)-Number(b.id)).map(p=>p.id));
   await db.transaction(async trx=>{await trx.raw('SET LOCAL ROLE comsca_group_reader');await trx.raw("SELECT set_config('app.group_id',?,true)",[String(foreign.group.id)]);assert.deepEqual(await trx('member_payouts'),[]);});
@@ -156,4 +188,8 @@ test('member payouts: accounting, HTTP isolation, retries, concurrency, constrai
   assert.equal((await pay(body('first'))).statusCode,409);
   assert.equal((await read()).body.cycle.status,'closed');
   assert.equal((await read()).body.payouts.length,4);
+  const closedMe = await meHttp(f.users[1]);
+  assert.equal(closedMe.statusCode,200);
+  assert.deepEqual(JSON.parse(closedMe.body),{success:true,cycle:null,distribution:null});
+  assert.deepEqual((await f.invoke(me,'get')).body, {success:true,cycle:null,distribution:null});
 });

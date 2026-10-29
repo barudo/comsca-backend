@@ -51,3 +51,10 @@ Errors: 400 malformed input or unsuitable account classification; 401 missing/in
 Distribution retrieval now derives `summary.total_paid` from current member payment progress. The declaration's `cash_available`, `cash_shortfall`, `warnings` and entitlement totals remain snapshots at declaration time, not live cash reports. Closing still records manager confirmation without checking all payouts are complete.
 
 Each `summary.members` and `distributions` entry includes `user: { id, first_name, family_name, username }`, alongside `user_id`. Profiles reflect current user information; declaration amounts remain unchanged. No password or authentication identifiers are included.
+
+
+## My distribution
+
+`GET /api/v1/me/payouts` requires a bearer token and `x-group-slug`. Any user with a profile in the group (including MEMBER) can read their own distribution for the current distributing cycle. Returns `{ "success": true, "cycle": { "id": "1", "status": "distributing" }, "distribution": {...} }`. The distribution contains the existing entitlement/payment fields, safe `user` profile, and decimal-string `remaining_amount` (`net_amount - paid_amount`). This is the member's entitlement and payment progress, not the list of individual payout transactions.
+
+No distributing cycle returns null for both cycle and distribution. If the user has no declared distribution, only distribution is null. Missing group profile returns 403; a legacy distributing cycle without a declaration returns 409. No user/cycle query parameters override the authenticated identity or current cycle. Group-wide distribution/payout endpoints retain their financial-role restrictions.

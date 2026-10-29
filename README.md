@@ -1637,3 +1637,7 @@ writes.
 `GET /api/v1/cycles/:cycleId/payouts` returns `success`, `cycle` and `payouts`, ordered by ID. Also permits AUDITOR and remains available after closing.
 
 Migration 038 is required. See [cycle distribution and payout documentation](docs/cycle-distributions.md) for the full contract and errors.
+
+### Current user's distribution
+
+`GET /api/v1/me/payouts` returns the authenticated user's distribution for the selected group's current distributing cycle. Send bearer authentication and `x-group-slug`; MEMBER access is allowed. Returns `success`, `cycle`, and one `distribution` with a safe user profile, payment status, `paid_amount`, and `remaining_amount`. No distributing cycle returns null cycle/distribution; no entitlement for this user returns null distribution. Identity comes from the token, not a query parameter. See [distribution documentation](docs/cycle-distributions.md#my-distribution).

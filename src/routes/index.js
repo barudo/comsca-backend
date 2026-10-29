@@ -1,3 +1,4 @@
+const MePayoutsHandler = require("../handlers/me-payouts");
 const MemberPayoutsHandler = require("../handlers/member-payouts");
 const CycleDistributionsHandler = require("../handlers/cycle-distributions");
 const express = require("express");
@@ -37,6 +38,7 @@ const SupabaseAuthHandler = require("../handlers/supabase-auth");
 function createRouter(database) {
   const router = express.Router();
   const cycles = new CyclesHandler();
+  const mePayouts = new MePayoutsHandler();
   const memberPayouts = new MemberPayoutsHandler();
   const cycleDistributions = new CycleDistributionsHandler();
   const cycleAccounts = new CycleAccountsHandler();
@@ -246,6 +248,7 @@ function createRouter(database) {
   router.get("/api/v1/loans/apply", authenticate, loanApplications.list.bind(loanApplications));
   router.post("/api/v1/me/loans/apply", authenticate, loanApplications.applyMe.bind(loanApplications));
   router.get("/api/v1/me/loans/apply", authenticate, loanApplications.latestMe.bind(loanApplications));
+  router.get("/api/v1/me/payouts", authenticate, mePayouts.get.bind(mePayouts));
   router.post("/api/v1/cycles", authenticate, cycles.create.bind(cycles));
   router.get("/api/v1/cycles/:cycleId/distributions", authenticate, cycleDistributions.list.bind(cycleDistributions));
   router.post("/api/v1/cycles/:cycleId/payouts", authenticate, memberPayouts.create.bind(memberPayouts));
