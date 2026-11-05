@@ -37,6 +37,7 @@ const SupabaseAuthHandler = require("../handlers/supabase-auth");
 
 function createRouter(database) {
   const router = express.Router();
+  router.use("/api/v1/tindamate/licenses", require("./tindamate-licenses")(database));
   const cycles = new CyclesHandler();
   const mePayouts = new MePayoutsHandler();
   const memberPayouts = new MemberPayoutsHandler();
