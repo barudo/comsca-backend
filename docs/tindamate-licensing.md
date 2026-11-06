@@ -69,30 +69,27 @@ There is no expiry field. Reconciliation checks current purchase state with Goog
 
 ## Runtime configuration
 
-Set the variables in `.env` or the deployment environment consumed by Serverless. The signing private key and Google credentials must not be plaintext environment values: pass exact Secrets Manager secret ARNs or SSM SecureString parameter ARNs instead. The hash and encryption keys below are currently Lambda environment variables and require appropriate access controls.
+Set the variables in the deployment environment consumed by Serverless. The signing private key, hash key, and encryption key are Lambda environment variables; Google credentials are read from Secrets Manager or SSM SecureString. Restrict access to the Lambda configuration, deployment environment, CloudFormation artifacts, and the KMS keys protecting them. Never print, commit, or share private key material.
 
 | Variable | Required | Meaning |
 |---|---:|---|
 | `TINDAMATE_TOKEN_HASH_KEY` | Yes | Base64 encoding of exactly 32 random bytes; stable HMAC key for purchase-token lookup |
 | `TINDAMATE_TOKEN_ENCRYPTION_KEY` | Yes | Base64 encoding of a different 32 random bytes; stable AES-256-GCM key for stored purchase tokens |
-| `TINDAMATE_SIGNING_SECRET_ARN` | Yes | Exact Secrets Manager or SSM ARN containing the Ed25519 PKCS#8 private-key PEM |
-| `TINDAMATE_SIGNING_SECRET_FIELD` | No | Property name if the signing secret is a JSON object; leave empty for a direct PEM value |
+| `TINDAMATE_SIGNING_PRIVATE_KEY` | Yes | Ed25519 private-key PEM with actual or escaped newline characters |
 | `TINDAMATE_GOOGLE_SECRET_ARN` | Yes | Exact Secrets Manager or SSM ARN containing Google Play service-account JSON |
 | `TINDAMATE_GOOGLE_SECRET_FIELD` | No | Property name if the Google secret is a JSON object; leave empty for direct service-account JSON |
 | `TINDAMATE_PUBSUB_AUDIENCE` | For RTDN | Exact OIDC audience configured on the Pub/Sub push subscription |
 | `TINDAMATE_PUBSUB_EMAIL` | For RTDN | Email of the service account used for authenticated push |
 | `TINDAMATE_PUBSUB_SUBSCRIPTION` | For RTDN | Exact subscription resource name, e.g. `projects/<project>/subscriptions/<name>` |
-| `TINDAMATE_SECRETS_KMS_KEY_ARN` | If applicable | Exact customer-managed KMS key ARN used to decrypt either runtime secret |
+| `TINDAMATE_SECRETS_KMS_KEY_ARN` | If applicable | Exact customer-managed KMS key ARN used to decrypt the Google credential secret |
 
 The signing key is checked at startup against the mobile app's pinned public key. A mismatch fails closed with `503`; do not replace the pinned key or generate a new production signer without coordinating a mobile key rotation.
 
-The actual signing-secret name and ARN were not provided and are not recorded in this repository. An operator must supply the exact existing secret ARN; the code supports either Secrets Manager or SSM SecureString. The matching production key and deployed permissions have not been verified.
-
-If the key currently exists only in the Lambda environment variable `TINDAMATE_SIGNING_PRIVATE_KEY`, it is not read by this implementation. An operator must transfer it securely to a Secrets Manager secret or SSM SecureString without exposing it in logs, shell history, source files, or chat. Configure the resulting ARN as `TINDAMATE_SIGNING_SECRET_ARN` and grant the scoped permissions above before deploying. After the new configuration and a successful verification have been confirmed, remove the old Lambda environment variable. A Serverless deployment may replace manually edited Lambda environment variables, so ensure the target deployment configuration is complete before deploying.
+**Deployment warning:** Serverless resolves `TINDAMATE_SIGNING_PRIVATE_KEY` from the deployment process environment. A key set only in the Lambda console is not automatically read by Serverless. If the deployment variable is absent, the configured empty default can replace the existing Lambda value and licensing will return `503`. Securely supply the same key to the deployment process before deploying; never paste it into a command, logs, source control, or chat. The resolved key can be present in rendered CloudFormation templates, deployment artifacts, and infrastructure state; protect and clean up those artifacts according to your security policies. Alternatively, manage the Lambda environment using an approved deployment process that preserves the key. A console-only key does not take effect in this source code until the updated code is deployed. The production key's match with the mobile app has not been verified.
 
 Generate hash and encryption keys separately in a secure operator environment (for example, generate 32 random bytes and base64-encode each). Keep both stable: changing the hash key makes existing purchases unfindable, and changing the encryption key prevents reconciliation from decrypting stored tokens. Key rotation requires a planned data migration and should not be done by simply changing environment values.
 
-The Lambda execution role needs `secretsmanager:GetSecretValue` or `ssm:GetParameter` on each exact configured secret ARN. For a customer-managed KMS key, grant `kms:Decrypt` on that exact key and ensure the key policy also permits the Lambda role. The Serverless template conditionally adds these scoped policies; the AWS account, region, secret ARNs, KMS key, and resulting deployed role still need operator verification. The AWS SDK v3 clients are declared application dependencies and packaged with the Lambda.
+The Lambda execution role needs `secretsmanager:GetSecretValue` or `ssm:GetParameter` on the exact Google credential secret ARN. For a customer-managed KMS key, grant `kms:Decrypt` on that exact key and ensure the key policy also permits the Lambda role. The Serverless template conditionally adds these scoped policies; the AWS account, region, secret ARN, KMS key, and resulting deployed role still need operator verification. The AWS SDK v3 clients are declared application dependencies and packaged with the Lambda.
 
 The Google service account must have the Google Play Developer API access required to read one-time product purchases and acknowledge them. For RTDN, configure Pub/Sub push authentication with the specified service account and audience, then set the exact subscription name above. Without those three RTDN settings, the webhook is intentionally unavailable.
 

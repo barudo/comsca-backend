@@ -50,12 +50,14 @@ async function config(env = process.env, dependencies = {}) {
       if (typeof selected !== 'string' || !selected) throw Error();
       return selected;
     };
-    const [pem, credentialsText] = await Promise.all([load('TINDAMATE_SIGNING'), load('TINDAMATE_GOOGLE')]);
+    const pem = env.TINDAMATE_SIGNING_PRIVATE_KEY;
+    if (typeof pem !== 'string' || !pem) throw Error();
     const privateKey = crypto.createPrivateKey(pem.replace(/\\n/g, '\n'));
     if (privateKey.asymmetricKeyType !== 'ed25519') throw Error();
     const publicKey = crypto.createPublicKey(privateKey);
     const raw = publicKey.export({ type: 'spki', format: 'der' }).subarray(-32);
     if (!raw.equals(Buffer.from(dependencies.expectedPublicKey || APPLICATION_PUBLIC_KEY, 'base64'))) throw Error();
+    const credentialsText = await load('TINDAMATE_GOOGLE');
     const credentials = JSON.parse(credentialsText);
     if (credentials.type !== 'service_account' || !credentials.client_email || !credentials.private_key) throw Error();
     credentials.private_key = credentials.private_key.replace(/\\n/g, '\n');

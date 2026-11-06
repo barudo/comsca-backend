@@ -33,36 +33,40 @@ function fixture(issuedAt) {
 const body = { packageName: config.packageName, productId: config.productId, purchaseToken: 'secret-token' };
 const good = () => ({ productId: config.productId, purchaseToken: body.purchaseToken, purchaseState: 0, acknowledgementState: 0, consumptionState: 0, quantity: 1, refundableQuantity: 1 });
 test('lazy config rejects missing keys with safe error', async () => assert.rejects(loadConfig({}), /Licensing unavailable/));
-test('config loads exact secret fields and pins the signing public key', async () => {
+test('config loads the environment signing key and pins its public key', async () => {
   const privatePem = keys.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
   const credentials = JSON.stringify({ type: 'service_account', client_email: 'publisher@example.test', private_key: privatePem });
-  const signingArn = 'arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:tindamate/signing-abc123';
   const googleArn = 'arn:aws:ssm:ap-southeast-1:123456789012:parameter/tindamate/google';
   const rawPublicKey = keys.publicKey.export({ format: 'der', type: 'spki' }).subarray(-32);
   const env = {
     TINDAMATE_TOKEN_HASH_KEY: crypto.randomBytes(32).toString('base64'),
     TINDAMATE_TOKEN_ENCRYPTION_KEY: crypto.randomBytes(32).toString('base64'),
-    TINDAMATE_SIGNING_SECRET_ARN: signingArn,
-    TINDAMATE_SIGNING_SECRET_FIELD: 'private_key',
+    TINDAMATE_SIGNING_PRIVATE_KEY: privatePem,
     TINDAMATE_GOOGLE_SECRET_ARN: googleArn,
     TINDAMATE_GOOGLE_SECRET_FIELD: 'credentials',
   };
-  const secrets = new Map([
-    [signingArn, JSON.stringify({ private_key: privatePem })],
-    [googleArn, JSON.stringify({ credentials })],
-  ]);
-  const loaded = await loadConfig(env, {
-    readSecret: async arn => secrets.get(arn),
-    expectedPublicKey: rawPublicKey,
-  });
-  assert.equal(loaded.packageName, PACKAGE_NAME);
-  assert.equal(loaded.productId, PRODUCT_ID);
-  assert.equal(loaded.credentials.client_email, 'publisher@example.test');
-  await assert.rejects(loadConfig({ ...env, TINDAMATE_TOKEN_ENCRYPTION_KEY: env.TINDAMATE_TOKEN_HASH_KEY }, {
-    readSecret: async arn => secrets.get(arn),
-    expectedPublicKey: rawPublicKey,
-  }), /Licensing unavailable/);
-  await assert.rejects(loadConfig(env, { readSecret: async arn => secrets.get(arn) }), /Licensing unavailable/);
+  const reads = [];
+  const readSecret = async arn => { reads.push(arn); return JSON.stringify({ credentials }); };
+  for (const pem of [privatePem, privatePem.replace(/\n/g, '\\n')]) {
+    const loaded = await loadConfig({ ...env, TINDAMATE_SIGNING_PRIVATE_KEY: pem }, {
+      readSecret, expectedPublicKey: rawPublicKey,
+    });
+    assert.equal(loaded.packageName, PACKAGE_NAME);
+    assert.equal(loaded.productId, PRODUCT_ID);
+    assert.equal(loaded.credentials.client_email, 'publisher@example.test');
+    const certificate = createCrypto(loaded).certificate({ id: crypto.randomUUID(), issued_at: new Date().toISOString() });
+    assert(nacl.sign.detached.verify(Buffer.from(canonical(certificate.payload)), Buffer.from(certificate.signature, 'base64'), rawPublicKey));
+  }
+  assert.deepEqual(reads, [googleArn, googleArn]);
+  const dependencies = { readSecret, expectedPublicKey: rawPublicKey };
+  for (const invalidKey of [undefined, '', 'not-a-private-key']) {
+    await assert.rejects(loadConfig({ ...env, TINDAMATE_SIGNING_PRIVATE_KEY: invalidKey }, dependencies),
+      error => error.status === 503 && error.message === 'Licensing unavailable');
+  }
+  const wrongKey = crypto.generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' });
+  await assert.rejects(loadConfig({ ...env, TINDAMATE_SIGNING_PRIVATE_KEY: wrongKey }, dependencies), /Licensing unavailable/);
+  await assert.rejects(loadConfig({ ...env, TINDAMATE_TOKEN_ENCRYPTION_KEY: env.TINDAMATE_TOKEN_HASH_KEY }, dependencies), /Licensing unavailable/);
+  await assert.rejects(loadConfig(env, { readSecret }), /Licensing unavailable/);
   await assert.rejects(loadConfig(env, {
     readSecret: async () => { throw Error('sensitive provider error'); },
     expectedPublicKey: rawPublicKey,

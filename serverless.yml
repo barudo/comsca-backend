@@ -14,8 +14,7 @@ provider:
     CORS_ALLOWED_ORIGINS: ${env:CORS_ALLOWED_ORIGINS, ''}
     TINDAMATE_TOKEN_HASH_KEY: ${env:TINDAMATE_TOKEN_HASH_KEY, ''}
     TINDAMATE_TOKEN_ENCRYPTION_KEY: ${env:TINDAMATE_TOKEN_ENCRYPTION_KEY, ''}
-    TINDAMATE_SIGNING_SECRET_ARN: ${env:TINDAMATE_SIGNING_SECRET_ARN, ''}
-    TINDAMATE_SIGNING_SECRET_FIELD: ${env:TINDAMATE_SIGNING_SECRET_FIELD, ''}
+    TINDAMATE_SIGNING_PRIVATE_KEY: ${env:TINDAMATE_SIGNING_PRIVATE_KEY, ''}
     TINDAMATE_GOOGLE_SECRET_ARN: ${env:TINDAMATE_GOOGLE_SECRET_ARN, ''}
     TINDAMATE_GOOGLE_SECRET_FIELD: ${env:TINDAMATE_GOOGLE_SECRET_FIELD, ''}
     TINDAMATE_PUBSUB_AUDIENCE: ${env:TINDAMATE_PUBSUB_AUDIENCE, ''}
@@ -84,19 +83,6 @@ resources:
             ThrottlingBurstLimit: 20
             ThrottlingRateLimit: 10
   Conditions:
-    HasSigningSecret:
-      Fn::Not:
-        - Fn::Equals: ["${env:TINDAMATE_SIGNING_SECRET_ARN, ''}", '']
-    SigningIsSSM:
-      Fn::Equals:
-        - Fn::Select:
-            - 2
-            - Fn::Split:
-                - ':'
-                - Fn::Join:
-                    - ''
-                    - ["${env:TINDAMATE_SIGNING_SECRET_ARN, ''}", ':none:none:none']
-        - ssm
     HasGoogleSecret:
       Fn::Not:
         - Fn::Equals: ["${env:TINDAMATE_GOOGLE_SECRET_ARN, ''}", '']
@@ -114,19 +100,6 @@ resources:
       Fn::Not:
         - Fn::Equals: ["${env:TINDAMATE_SECRETS_KMS_KEY_ARN, ''}", '']
   Resources:
-    TindaMateSigningSecretPolicy:
-      Type: AWS::IAM::Policy
-      Condition: HasSigningSecret
-      Properties:
-        PolicyName: tindamate-signing-secret
-        Roles: [{ Ref: IamRoleLambdaExecution }]
-        PolicyDocument:
-          Version: '2012-10-17'
-          Statement:
-            - Effect: Allow
-              Action:
-                Fn::If: [SigningIsSSM, 'ssm:GetParameter', 'secretsmanager:GetSecretValue']
-              Resource: "${env:TINDAMATE_SIGNING_SECRET_ARN, ''}"
     TindaMateGoogleSecretPolicy:
       Type: AWS::IAM::Policy
       Condition: HasGoogleSecret
