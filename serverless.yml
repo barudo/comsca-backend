@@ -62,6 +62,13 @@ functions:
 resources:
   extensions:
     HttpApiStage:
+      DependsOn:
+        - HttpApiRoutePostApiV1TindamateLicensesVerify
+        - HttpApiRoutePostApiV1TindamateLicensesRestore
+        - HttpApiRoutePostApiV1TindamateLicensesV1GoogleDashplayVerify
+        - HttpApiRoutePostApiV1TindamateLicensesReconcile
+        - HttpApiRoutePostApiV1TindamateLicensesV1GoogleDashplayReconcile
+        - HttpApiRoutePostApiV1TindamateLicensesRtdn
       Properties:
         RouteSettings:
           "POST /api/v1/tindamate/licenses/verify":
