@@ -1,25 +1,16 @@
 const { GoogleAuth, OAuth2Client } = require('google-auth-library');
 const { LicensingError } = require('./config');
-function validatePurchase(data, config) {
+function validatePurchase(data, config, token) {
   const malformed = () => { throw new LicensingError(502, 'Invalid purchase provider response'); };
-  if (!data || !Array.isArray(data.productLineItem) || data.productLineItem.length !== 1) return malformed();
-  const item = data.productLineItem[0];
-  if (typeof item?.productId !== 'string') return malformed();
-  if (item.productId !== config.productId) return { status: 'INVALID' };
-  const state = data.purchaseStateContext?.purchaseState;
-  if (!['PURCHASED', 'PENDING', 'CANCELLED'].includes(state)) return malformed();
-  if (!['ACKNOWLEDGEMENT_STATE_PENDING', 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED'].includes(data.acknowledgementState)) return malformed();
-  const offer = item.productOfferDetails || {};
-  if (offer.rentOfferDetails || offer.preorderOfferDetails) return { status: 'INVALID' };
-  if (offer.quantity !== undefined && offer.quantity !== 1) return malformed();
-  if (offer.refundableQuantity !== undefined && ![0, 1].includes(offer.refundableQuantity)) return malformed();
-  if (offer.consumptionState !== undefined && offer.consumptionState !== 'CONSUMPTION_STATE_YET_TO_BE_CONSUMED') return malformed();
-  const acknowledged = data.acknowledgementState === 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED';
-  const metadata = { purchaseState: state, orderId: typeof data.orderId === 'string' ? data.orderId : null, purchasedAt: typeof data.purchaseCompletionTime === 'string' && Number.isFinite(Date.parse(data.purchaseCompletionTime)) ? data.purchaseCompletionTime : null };
-  if (state === 'CANCELLED') return { status: 'REVOKED', acknowledged, ...metadata };
-  if (state === 'PENDING') return { status: 'PENDING', acknowledged, ...metadata };
-  if (typeof data.purchaseCompletionTime !== 'string' || !Number.isFinite(Date.parse(data.purchaseCompletionTime))) return malformed();
-  return { status: offer.refundableQuantity === 0 ? 'REFUNDED' : 'VERIFIED', acknowledged, ...metadata };
+  if (!data || typeof data !== 'object' || ![0, 1, 2].includes(data.purchaseState) || ![0, 1].includes(data.acknowledgementState) || ![0, 1].includes(data.consumptionState)) return malformed();
+  if ((data.productId !== undefined && data.productId !== config.productId) || (data.purchaseToken !== undefined && data.purchaseToken !== token)) return { status: 'INVALID' };
+  if (data.consumptionState !== 0) return { status: 'INVALID' };
+  if (data.quantity !== undefined && data.quantity !== 1) return malformed();
+  if (data.refundableQuantity !== undefined && ![0, 1].includes(data.refundableQuantity)) return malformed();
+  const acknowledged = data.acknowledgementState === 1;
+  if (data.purchaseState === 1) return { status: 'REVOKED', acknowledged };
+  if (data.purchaseState === 2) return { status: 'PENDING', acknowledged };
+  return { status: data.refundableQuantity === 0 ? 'REFUNDED' : 'VERIFIED', acknowledged };
 }
 class GoogleAdapter {
   constructor(config) {
@@ -37,8 +28,8 @@ class GoogleAdapter {
     }
   }
   async lookup(token) {
-    const data = await this.request(`purchases/productsv2/tokens/${encodeURIComponent(token)}`);
-    return data === null ? { status: 'INVALID' } : validatePurchase(data, this.config);
+    const data = await this.request(`purchases/products/${encodeURIComponent(this.config.productId)}/tokens/${encodeURIComponent(token)}`);
+    return data === null ? { status: 'INVALID' } : validatePurchase(data, this.config, token);
   }
   async acknowledge(token) {
     await this.request(`purchases/products/${this.config.productId}/tokens/${encodeURIComponent(token)}:acknowledge`, 'POST');

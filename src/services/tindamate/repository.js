@@ -1,7 +1,8 @@
 const { randomUUID } = require('node:crypto');
 const terminal = status => ['REVOKED', 'REFUNDED'].includes(status);
 class Repository {
-  constructor(db) { this.db = db; }
+  constructor(db, config = {}) { this.db = db; this.packageName = config.packageName || 'com.vebatech.tindamate'; this.productId = config.productId || 'tindamate_pro_lifetime'; }
+  async findToken(session, hash) { return session.transaction(trx => trx('tindamate_google_play_purchases').where({ token_hash: hash }).first()); }
   async findEntitlement(id) {
     return this.db('tindamate_entitlements as e').join('tindamate_google_play_purchases as p', 'p.id', 'e.purchase_id')
       .where('e.id', id).select('p.*').first();
@@ -34,13 +35,13 @@ class Repository {
     return session.transaction(async trx => {
       let p = await trx('tindamate_google_play_purchases').where({ token_hash: hash }).first();
       const status = p && terminal(p.status) ? p.status : state.status;
-      const values = { status, order_id: state.orderId, purchase_state: state.purchaseState, purchased_at: state.purchasedAt, last_verified_at: new Date(), revoked_at: terminal(status) ? (p?.revoked_at || new Date()) : null, updated_at: new Date(), acknowledgement_status: state.acknowledged ? 'ACKNOWLEDGED' : (p?.acknowledgement_status || 'PENDING') };
+      const values = { status, last_verified_at: new Date(), revoked_at: terminal(status) ? (p?.revoked_at || new Date()) : null, updated_at: new Date(), acknowledgement_status: state.acknowledged ? 'ACKNOWLEDGED' : (p?.acknowledgement_status || 'PENDING') };
       if (p) [p] = await trx('tindamate_google_play_purchases').where({ id: p.id }).update(values).returning('*');
-      else [p] = await trx('tindamate_google_play_purchases').insert({ id: randomUUID(), token_hash: hash, encrypted_token: encrypted, ...values }).returning('*');
+      else [p] = await trx('tindamate_google_play_purchases').insert({ id: randomUUID(), token_hash: hash, encrypted_token: encrypted, package_name: this.packageName, product_id: this.productId, ...values }).returning('*');
       let e = await trx('tindamate_entitlements').where({ purchase_id: p.id }).first();
       if (terminal(status) && e) [e] = await trx('tindamate_entitlements').where({ id: e.id }).update({ status: 'REVOKED', updated_at: new Date() }).returning('*');
       if (status === 'VERIFIED' && !e) [e] = await trx('tindamate_entitlements').insert({ id: randomUUID(), purchase_id: p.id, status: 'VERIFIED' }).returning('*');
-      await trx('tindamate_license_events').insert({ id: randomUUID(), purchase_id: p.id, event_type: status, details: {} });
+      await trx('tindamate_license_events').insert({ id: randomUUID(), purchase_id: p.id, event_type: status });
       return { purchase: p, entitlement: e };
     });
   }
@@ -49,7 +50,7 @@ class Repository {
       acknowledgement_status: succeeded ? 'ACKNOWLEDGED' : 'RETRY',
       acknowledgement_attempts: this.db.raw('acknowledgement_attempts + 1'), acknowledgement_attempted_at: new Date(), updated_at: new Date(),
     });
-      await trx('tindamate_license_events').insert({ id: randomUUID(), purchase_id: id, event_type: succeeded ? 'ACKNOWLEDGED' : 'ACKNOWLEDGEMENT_FAILED', details: {} });
+      await trx('tindamate_license_events').insert({ id: randomUUID(), purchase_id: id, event_type: succeeded ? 'ACKNOWLEDGED' : 'ACKNOWLEDGEMENT_FAILED' });
     });
   }
   async event(session, key, purchaseId) {

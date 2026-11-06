@@ -20,17 +20,18 @@ function createCrypto(config) {
       decipher.setAAD(Buffer.from(config.packageName)); decipher.setAuthTag(Buffer.from(tag, 'base64'));
       return Buffer.concat([decipher.update(Buffer.from(data, 'base64')), decipher.final()]).toString('utf8');
     },
-    certificate(entitlement) {
+    certificate(entitlement, issuedAt = entitlement.issued_at) {
       const payload = { certificateVersion: 1, entitlementId: entitlement.id,
-        issuedAt: new Date(entitlement.issued_at).toISOString(), plan: 'PRO', productId: config.productId, source: 'GOOGLE_PLAY' };
-      return { payload, signature: crypto.sign(null, Buffer.from(canonical(payload)), config.privateKey).toString('base64'), keyId: config.keyId };
+        issuedAt: new Date(issuedAt).toISOString(), plan: 'PRO', productId: config.productId, source: 'GOOGLE_PLAY' };
+      return { payload, signature: crypto.sign(null, Buffer.from(canonical(payload)), config.privateKey).toString('base64') };
     },
     valid(certificate) {
       try {
         const c = certificate?.payload;
         return c && c.certificateVersion === 1 && c.plan === 'PRO' && c.productId === config.productId && c.source === 'GOOGLE_PLAY' &&
-          typeof c.entitlementId === 'string' && /^[0-9a-f-]{36}$/i.test(c.entitlementId) && typeof c.issuedAt === 'string' &&
-          typeof certificate.signature === 'string' && crypto.verify(null, Buffer.from(canonical(c)), config.publicKey, Buffer.from(certificate.signature, 'base64'));
+          typeof c.entitlementId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(c.entitlementId) && typeof c.issuedAt === 'string' &&
+          Number.isFinite(Date.parse(c.issuedAt)) && new Date(c.issuedAt).toISOString() === c.issuedAt && Date.parse(c.issuedAt) <= Date.now() &&
+          typeof certificate.signature === 'string' && /^[A-Za-z0-9+/]{86}==$/.test(certificate.signature) && crypto.verify(null, Buffer.from(canonical(c)), config.publicKey, Buffer.from(certificate.signature, 'base64'));
       } catch { return false; }
     },
   };
