@@ -9,7 +9,7 @@ const invalid = () => ({ status: 'INVALID', message: 'License not found or inval
 function validateRequest(method, body, packageName = PACKAGE_NAME, productId = PRODUCT_ID) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return bad();
   if (method === 'verify' && (!tokenValid(body.purchaseToken) || body.packageName !== packageName || body.productId !== productId)) return bad();
-  if (method === 'reconcile' && (!uuidValid(body.entitlementId) || (body.packageName !== undefined && body.packageName !== packageName))) return bad();
+  if (method === 'reconcile' && (!uuidValid(body.entitlementId) || body.packageName !== packageName)) return bad();
 }
 class LicensingService {
   constructor(config, repository, google) { this.config = config; this.repository = repository; this.google = google; this.crypto = createCrypto(config); }

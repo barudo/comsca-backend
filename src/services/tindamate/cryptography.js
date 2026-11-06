@@ -21,8 +21,10 @@ function createCrypto(config) {
       return Buffer.concat([decipher.update(Buffer.from(data, 'base64')), decipher.final()]).toString('utf8');
     },
     certificate(entitlement, issuedAt = entitlement.issued_at) {
+      const timestamp = new Date(issuedAt);
+      if (!Number.isFinite(timestamp.getTime()) || timestamp.getTime() > Date.now()) throw Error('Invalid certificate timestamp');
       const payload = { certificateVersion: 1, entitlementId: entitlement.id,
-        issuedAt: new Date(issuedAt).toISOString(), plan: 'PRO', productId: config.productId, source: 'GOOGLE_PLAY' };
+        issuedAt: timestamp.toISOString(), plan: 'PRO', productId: config.productId, source: 'GOOGLE_PLAY' };
       return { payload, signature: crypto.sign(null, Buffer.from(canonical(payload)), config.privateKey).toString('base64') };
     },
     valid(certificate) {

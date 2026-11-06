@@ -1,13 +1,14 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+const nacl = require('tweetnacl');
 const { LicensingService } = require('../src/services/tindamate/service');
-const { validatePurchase } = require('../src/services/tindamate/google');
-const { config: loadConfig, PACKAGE_NAME, PRODUCT_ID } = require('../src/services/tindamate/config');
-const { canonical } = require('../src/services/tindamate/cryptography');
+const { GoogleAdapter, validatePurchase } = require('../src/services/tindamate/google');
+const { config: loadConfig, PACKAGE_NAME, PRODUCT_ID, APPLICATION_PUBLIC_KEY } = require('../src/services/tindamate/config');
+const { canonical, createCrypto } = require('../src/services/tindamate/cryptography');
 const keys = crypto.generateKeyPairSync('ed25519');
 const config = { ...keys, hashKey: crypto.randomBytes(32), encryptionKey: crypto.randomBytes(32), packageName: PACKAGE_NAME, productId: PRODUCT_ID, subscription: 'projects/test/subscriptions/rtdn' };
-function fixture() {
+function fixture(issuedAt) {
   let purchase, entitlement, queue = Promise.resolve(); const events = new Set();
   const repository = {
     async withLock(_hash, work) { const previous = queue; let release; queue = new Promise(resolve => release = resolve); await previous; try { return await work({}); } finally { release(); } },
@@ -17,7 +18,7 @@ function fixture() {
       const status = ['REVOKED', 'REFUNDED'].includes(purchase?.status) ? purchase.status : state.status;
       purchase = { id: 'purchase', token_hash: hash, encrypted_token: encrypted, package_name: config.packageName, product_id: config.productId, ...purchase, status,
         acknowledgement_status: state.acknowledged ? 'ACKNOWLEDGED' : purchase?.acknowledgement_status || 'PENDING' };
-      if (status === 'VERIFIED' && !entitlement) entitlement = { id: crypto.randomUUID(), issued_at: new Date().toISOString() };
+      if (status === 'VERIFIED' && !entitlement) entitlement = { id: crypto.randomUUID(), issued_at: issuedAt || new Date().toISOString() };
       return { purchase, entitlement };
     },
     async ack(_session, _id, succeeded) { purchase.acknowledgement_status = succeeded ? 'ACKNOWLEDGED' : 'RETRY'; },
@@ -61,6 +62,34 @@ test('config loads exact secret fields and pins the signing public key', async (
     readSecret: async arn => secrets.get(arn),
     expectedPublicKey: rawPublicKey,
   }), /Licensing unavailable/);
+  await assert.rejects(loadConfig(env, { readSecret: async arn => secrets.get(arn) }), /Licensing unavailable/);
+  await assert.rejects(loadConfig(env, {
+    readSecret: async () => { throw Error('sensitive provider error'); },
+    expectedPublicKey: rawPublicKey,
+  }), error => error.status === 503 && error.message === 'Licensing unavailable');
+});
+test('detached certificate matches literal canonical JSON and TweetNaCl', () => {
+  const c = createCrypto(config).certificate({
+    id: '41146f9a-53bb-4a2d-b868-ea70bb6e9a80',
+    issued_at: '2026-01-02T03:04:05.000Z',
+  });
+  const expected = '{"certificateVersion":1,"entitlementId":"41146f9a-53bb-4a2d-b868-ea70bb6e9a80","issuedAt":"2026-01-02T03:04:05.000Z","plan":"PRO","productId":"tindamate_pro_lifetime","source":"GOOGLE_PLAY"}';
+  assert.equal(canonical(c.payload), expected);
+  assert.deepEqual(Object.keys(c), ['payload', 'signature']);
+  assert.deepEqual(Object.keys(c.payload), ['certificateVersion', 'entitlementId', 'issuedAt', 'plan', 'productId', 'source']);
+  const message = Buffer.from(expected, 'utf8');
+  const signature = Buffer.from(c.signature, 'base64');
+  const rawPublicKey = keys.publicKey.export({ format: 'der', type: 'spki' }).subarray(-32);
+  assert.equal(signature.length, nacl.sign.signatureLength);
+  assert.equal(nacl.sign.detached.verify(message, signature, rawPublicKey), true);
+  assert.equal(nacl.sign.detached.verify(message, signature, Buffer.from(APPLICATION_PUBLIC_KEY, 'base64')), false);
+  assert.equal(nacl.sign.detached.verify(Buffer.from(expected + ' '), signature, rawPublicKey), false);
+});
+test('certificate signing rejects invalid and future issuance times', () => {
+  const signer = createCrypto(config);
+  const id = '41146f9a-53bb-4a2d-b868-ea70bb6e9a80';
+  assert.throws(() => signer.certificate({ id, issued_at: 'invalid' }), /Invalid certificate timestamp/);
+  assert.throws(() => signer.certificate({ id, issued_at: new Date(Date.now() + 60000) }), /Invalid certificate timestamp/);
 });
 test('Google promo without order id, pending, cancellation, refund and invalid product', () => {
   assert.equal(validatePurchase(good(), config, body.purchaseToken).status, 'VERIFIED');
@@ -71,6 +100,18 @@ test('Google promo without order id, pending, cancellation, refund and invalid p
 test('malformed provider response never grants or revokes', () => {
   for (const change of [d => delete d.purchaseState, d => d.purchaseState = 3, d => d.acknowledgementState = 2, d => d.consumptionState = 2, d => d.refundableQuantity = -1]) { const d = good(); change(d); assert.throws(() => validatePurchase(d, config, body.purchaseToken), /Invalid purchase provider response/); }
   const consumed = good(); consumed.consumptionState = 1; assert.equal(validatePurchase(consumed, config, body.purchaseToken).status, 'INVALID');
+});
+test('Google lookup and acknowledgement use the product-scoped API', async () => {
+  const adapter = new GoogleAdapter(config);
+  const requests = [];
+  adapter.auth = { async request(options) { requests.push(options); return { data: good() }; } };
+  assert.equal((await adapter.lookup(body.purchaseToken)).status, 'VERIFIED');
+  await adapter.acknowledge(body.purchaseToken);
+  const url = `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${PACKAGE_NAME}/purchases/products/${PRODUCT_ID}/tokens/${body.purchaseToken}`;
+  assert.equal(requests[0].url, url);
+  assert.equal(requests[0].method, 'GET');
+  assert.equal(requests[1].url, `${url}:acknowledge`);
+  assert.equal(requests[1].method, 'POST');
 });
 test('same token concurrency returns stable certificate; raw public key verifies canonical mobile format', async () => {
   const f = fixture(); const results = await Promise.all(Array.from({ length: 12 }, () => f.service.verify(body)));
@@ -89,8 +130,19 @@ test('same token concurrency returns stable certificate; raw public key verifies
   const raw = keys.publicKey.export({ format: 'der', type: 'spki' }).subarray(-32);
   const reconstructed = crypto.createPublicKey({ key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), raw]), format: 'der', type: 'spki' });
   assert(crypto.verify(null, Buffer.from(canonical(c.payload)), reconstructed, Buffer.from(c.signature, 'base64')));
-  assert.equal((await f.service.reconcile({ entitlementId: c.payload.entitlementId })).status, 'VERIFIED');
-  assert.equal((await f.service.reconcile({ entitlementId: crypto.randomUUID() })).status, 'INVALID');
+  assert.equal((await f.service.reconcile({ packageName: config.packageName, entitlementId: c.payload.entitlementId })).status, 'VERIFIED');
+  assert.equal((await f.service.reconcile({ packageName: config.packageName, entitlementId: crypto.randomUUID() })).status, 'INVALID');
+});
+test('reconciliation issues a fresh certificate with the same entitlement', async () => {
+  const f = fixture('2026-01-02T03:04:05.000Z');
+  const first = await f.service.verify(body);
+  const initialTimestamp = first.certificate.payload.issuedAt;
+  const reconciled = await f.service.reconcile({ packageName: config.packageName, entitlementId: first.certificate.payload.entitlementId });
+  assert.equal(reconciled.status, 'VERIFIED');
+  assert.equal(reconciled.certificate.payload.entitlementId, first.certificate.payload.entitlementId);
+  assert(Date.parse(reconciled.certificate.payload.issuedAt) > Date.parse(initialTimestamp));
+  assert(Date.parse(reconciled.certificate.payload.issuedAt) <= Date.now());
+  assert(f.service.crypto.valid(reconciled.certificate));
 });
 test('pending and invalid never acknowledge; package scope enforced', async () => {
   const f = fixture(); for (const status of ['PENDING', 'INVALID']) { f.google.state = { status }; assert.equal((await f.service.verify(body)).status, status); } assert.equal(f.google.acks, 0);
@@ -107,10 +159,22 @@ test('transaction and upstream failures never produce success or acknowledge', a
   f.repository.fail = false; f.google.error = Error('transient'); await assert.rejects(f.service.verify(body)); assert.equal(f.purchase(), undefined);
 });
 test('revocation is terminal even after stale purchased result', async () => {
-  for (const status of ['REVOKED', 'REFUNDED']) { const f = fixture(); await f.service.verify(body); f.google.state = { status }; assert.equal((await f.service.verify(body)).status, 'REVOKED'); f.google.state = { status: 'VERIFIED' }; assert.equal((await f.service.verify(body)).status, 'REVOKED'); }
+  for (const status of ['REVOKED', 'REFUNDED']) {
+    const f = fixture();
+    const verified = await f.service.verify(body);
+    f.google.state = { status };
+    const request = { packageName: config.packageName, entitlementId: verified.certificate.payload.entitlementId };
+    assert.equal((await f.service.reconcile(request)).status, 'REVOKED');
+    f.google.state = { status: 'VERIFIED' };
+    assert.equal((await f.service.verify(body)).status, 'REVOKED');
+    assert.equal((await f.service.reconcile(request)).status, 'REVOKED');
+  }
 });
 test('reconciliation validates UUID; encrypted token authenticated', async () => {
-  const f = fixture(); await assert.rejects(f.service.reconcile({ entitlementId: 'not-a-uuid' }), /Invalid request/);
+  const f = fixture();
+  await assert.rejects(f.service.reconcile({ packageName: config.packageName, entitlementId: 'not-a-uuid' }), /Invalid request/);
+  await assert.rejects(f.service.reconcile({ entitlementId: crypto.randomUUID() }), /Invalid request/);
+  await assert.rejects(f.service.reconcile({ packageName: 'other', entitlementId: crypto.randomUUID() }), /Invalid request/);
   const encrypted = f.service.crypto.encrypt('secret'); assert.equal(f.service.crypto.decrypt(encrypted), 'secret');
   const parts = encrypted.split('.'); parts[3] = Buffer.from('tamper').toString('base64'); assert.throws(() => f.service.crypto.decrypt(parts.join('.')));
 });

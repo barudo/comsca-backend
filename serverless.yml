@@ -93,7 +93,9 @@ resources:
             - 2
             - Fn::Split:
                 - ':'
-                - "${env:TINDAMATE_SIGNING_SECRET_ARN, 'arn:aws:none:region:account:none'}"
+                - Fn::Join:
+                    - ''
+                    - ["${env:TINDAMATE_SIGNING_SECRET_ARN, ''}", ':none:none:none']
         - ssm
     HasGoogleSecret:
       Fn::Not:
@@ -104,7 +106,9 @@ resources:
             - 2
             - Fn::Split:
                 - ':'
-                - "${env:TINDAMATE_GOOGLE_SECRET_ARN, 'arn:aws:none:region:account:none'}"
+                - Fn::Join:
+                    - ''
+                    - ["${env:TINDAMATE_GOOGLE_SECRET_ARN, ''}", ':none:none:none']
         - ssm
     HasSecretsKmsKey:
       Fn::Not:

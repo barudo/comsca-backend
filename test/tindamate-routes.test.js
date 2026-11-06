@@ -4,7 +4,7 @@ const { createApp } = require('../src/app');
 const { GoogleAdapter } = require('../src/services/tindamate/google');
 const { PACKAGE_NAME, PRODUCT_ID } = require('../src/services/tindamate/config');
 const verifyBody = { packageName: PACKAGE_NAME, productId: PRODUCT_ID, purchaseToken: 'test-token' };
-const reconcileBody = { entitlementId: '41146f9a-53bb-4a2d-b868-ea70bb6e9a80' };
+const reconcileBody = { packageName: PACKAGE_NAME, entitlementId: '41146f9a-53bb-4a2d-b868-ea70bb6e9a80' };
 async function withServer(services, work) {
   const app = createApp(() => { throw Error('COMSCA database must not be touched'); }, services);
   const server = await new Promise((resolve, reject) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); s.on('error', reject); });
@@ -17,6 +17,7 @@ test('licensing routes isolated, bounded JSON, aliases, safe errors, no GET stat
     for (const route of ['/status', '/unknown']) assert.equal((await fetch(path + route)).status, 404);
     for (const body of ['{', '[]', 'null']) assert.equal((await fetch(path + '/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })).status, 400);
     assert.equal((await fetch(path + '/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ x: 'x'.repeat(17000) }) })).status, 413);
+    assert.equal((await fetch(path + '/reconcile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ entitlementId: reconcileBody.entitlementId }) })).status, 400);
     const r = await fetch(path + '/reconcile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(reconcileBody) }); assert.equal(r.status, 503); assert(!JSON.stringify(await r.json()).includes('TOKEN_SECRET'));
   });
 });

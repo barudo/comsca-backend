@@ -17,25 +17,44 @@ All endpoints are `POST`, require `Content-Type: application/json`, and return `
 | `/api/v1/tindamate/licenses/v1/google-play/reconcile` | Mobile-client reconciliation alias |
 | `/api/v1/tindamate/licenses/rtdn` | Receive authenticated Google Play RTDN push messages |
 
-Verification request:
+Verification request (replace the base URL and token with test values):
+
+```sh
+curl -X POST 'https://<api-host>/api/v1/tindamate/licenses/verify' \
+  -H 'Content-Type: application/json' \
+  --data '{"packageName":"com.vebatech.tindamate","productId":"tindamate_pro_lifetime","purchaseToken":"<Google Play purchase token>"}'
+```
+
+Reconciliation request (use the entitlement ID returned by verification):
+
+```sh
+curl -X POST 'https://<api-host>/api/v1/tindamate/licenses/reconcile' \
+  -H 'Content-Type: application/json' \
+  --data '{"packageName":"com.vebatech.tindamate","entitlementId":"<UUID>"}'
+```
+
+For a verified purchase, either endpoint returns HTTP 200 with:
 
 ```json
 {
-  "packageName": "com.vebatech.tindamate",
-  "productId": "tindamate_pro_lifetime",
-  "purchaseToken": "<Google Play purchase token>"
+  "status": "VERIFIED",
+  "certificate": {
+    "payload": {
+      "certificateVersion": 1,
+      "entitlementId": "<UUID>",
+      "issuedAt": "<ISO-8601 UTC timestamp>",
+      "plan": "PRO",
+      "productId": "tindamate_pro_lifetime",
+      "source": "GOOGLE_PLAY"
+    },
+    "signature": "<base64 detached Ed25519 signature>"
+  }
 }
 ```
 
-Reconciliation request:
+Other HTTP 200 responses are `{"status":"PENDING"}`, `{"status":"REVOKED"}`, and `{"status":"INVALID","message":"License not found or invalid"}`. Malformed requests return 4xx. Provider, database, secret, and acknowledgement failures return 5xx rather than success-shaped fallbacks. Acknowledgement is retried on later verification requests if the first attempt fails.
 
-```json
-{
-  "entitlementId": "<UUID>"
-}
-```
-
-Reconciliation revalidates the stored purchase with Google; the UUID alone does not grant or reveal an entitlement. The API returns `VERIFIED` with a signed certificate, `PENDING`, `REVOKED`, or a generic `INVALID` result. Provider, database, secret, and acknowledgement failures return non-2xx errors rather than success-shaped fallbacks. Acknowledgement is retried on later verification requests if the first attempt fails.
+Reconciliation revalidates the stored purchase with Google, but it does not authenticate the caller or require purchase proof: anyone who knows a valid entitlement UUID can request a fresh certificate. Treat the UUID as a bearer credential and protect it. The API cannot prevent sharing across users or devices without an additional identity or proof mechanism.
 
 Certificates contain `payload` and `signature`. The Ed25519 signature is detached base64 over UTF-8 `JSON.stringify` output with these payload keys in this exact order:
 
@@ -50,7 +69,7 @@ There is no expiry field. Reconciliation checks current purchase state with Goog
 
 ## Runtime configuration
 
-Set the variables in `.env` or the deployment environment consumed by Serverless. Do not put secret values in Lambda environment variables; pass exact Secrets Manager secret ARNs or SSM SecureString parameter ARNs instead.
+Set the variables in `.env` or the deployment environment consumed by Serverless. The signing private key and Google credentials must not be plaintext environment values: pass exact Secrets Manager secret ARNs or SSM SecureString parameter ARNs instead. The hash and encryption keys below are currently Lambda environment variables and require appropriate access controls.
 
 | Variable | Required | Meaning |
 |---|---:|---|
@@ -66,6 +85,10 @@ Set the variables in `.env` or the deployment environment consumed by Serverless
 | `TINDAMATE_SECRETS_KMS_KEY_ARN` | If applicable | Exact customer-managed KMS key ARN used to decrypt either runtime secret |
 
 The signing key is checked at startup against the mobile app's pinned public key. A mismatch fails closed with `503`; do not replace the pinned key or generate a new production signer without coordinating a mobile key rotation.
+
+The actual signing-secret name and ARN were not provided and are not recorded in this repository. An operator must supply the exact existing secret ARN; the code supports either Secrets Manager or SSM SecureString. The matching production key and deployed permissions have not been verified.
+
+If the key currently exists only in the Lambda environment variable `TINDAMATE_SIGNING_PRIVATE_KEY`, it is not read by this implementation. An operator must transfer it securely to a Secrets Manager secret or SSM SecureString without exposing it in logs, shell history, source files, or chat. Configure the resulting ARN as `TINDAMATE_SIGNING_SECRET_ARN` and grant the scoped permissions above before deploying. After the new configuration and a successful verification have been confirmed, remove the old Lambda environment variable. A Serverless deployment may replace manually edited Lambda environment variables, so ensure the target deployment configuration is complete before deploying.
 
 Generate hash and encryption keys separately in a secure operator environment (for example, generate 32 random bytes and base64-encode each). Keep both stable: changing the hash key makes existing purchases unfindable, and changing the encryption key prevents reconciliation from decrypting stored tokens. Key rotation requires a planned data migration and should not be done by simply changing environment values.
 
