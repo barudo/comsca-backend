@@ -36,6 +36,11 @@ package:
     - '!docs/**'
 
 functions:
+  tindamateVoidedSweep:
+    handler: src/tindamate-voided-sweep.handler
+    timeout: 120
+    events:
+      - schedule: rate(6 hours)
   api:
     handler: src/handler.handler
     events:

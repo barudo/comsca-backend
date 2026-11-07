@@ -35,7 +35,7 @@ class Repository {
     return session.transaction(async trx => {
       let p = await trx('tindamate_google_play_purchases').where({ token_hash: hash }).first();
       const status = p && terminal(p.status) ? p.status : state.status;
-      const values = { status, last_verified_at: new Date(), revoked_at: terminal(status) ? (p?.revoked_at || new Date()) : null, updated_at: new Date(), acknowledgement_status: state.acknowledged ? 'ACKNOWLEDGED' : (p?.acknowledgement_status || 'PENDING') };
+      const values = { status, last_verified_at: new Date(), revoked_at: terminal(status) ? (p?.revoked_at || state.revokedAt || new Date()) : null, revocation_reason: terminal(status) ? (p?.revocation_reason || state.reason || 'GOOGLE_PLAY_REVOKED') : null, updated_at: new Date(), acknowledgement_status: state.acknowledged ? 'ACKNOWLEDGED' : (p?.acknowledgement_status || 'PENDING') };
       if (p) [p] = await trx('tindamate_google_play_purchases').where({ id: p.id }).update(values).returning('*');
       else [p] = await trx('tindamate_google_play_purchases').insert({ id: randomUUID(), token_hash: hash, encrypted_token: encrypted, package_name: this.packageName, product_id: this.productId, ...values }).returning('*');
       let e = await trx('tindamate_entitlements').where({ purchase_id: p.id }).first();

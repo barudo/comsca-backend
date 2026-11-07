@@ -1,7 +1,7 @@
 const { LicensingError, config: loadConfig, PACKAGE_NAME, PRODUCT_ID } = require('./config');
 const { createCrypto } = require('./cryptography');
 const { Repository, terminal } = require('./repository');
-const { GoogleAdapter } = require('./google');
+const { GoogleAdapter, validateVoidedPurchase } = require('./google');
 const bad = () => { throw new LicensingError(400, 'Invalid request'); };
 const tokenValid = token => typeof token === 'string' && token.length > 0 && token.length <= 4096 && !/[\s\x00-\x1f\x7f]/.test(token);
 const uuidValid = id => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
@@ -51,6 +51,22 @@ class LicensingService {
     if (!purchase || purchase.package_name !== this.config.packageName || purchase.product_id !== this.config.productId) return invalid();
     if (terminal(purchase.status)) return { status: 'REVOKED' };
     return this.process(this.crypto.decrypt(purchase.encrypted_token), undefined, true);
+  }
+
+  async sweepVoidedPurchases() {
+    let processed = 0;
+    for await (const item of this.google.voidedPurchases()) {
+      const state = validateVoidedPurchase(item);
+      const hash = this.crypto.hash(item.purchaseToken);
+      await this.repository.withLock(hash, async session => {
+        const stored = await this.repository.findToken(session, hash);
+        if (!stored || !terminal(stored.status)) {
+          await this.repository.persist(session, hash, this.crypto.encrypt(item.purchaseToken), state);
+        }
+      });
+      processed++;
+    }
+    return { processed };
   }
 
   async rtdn(body, header) {

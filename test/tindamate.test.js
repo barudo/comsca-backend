@@ -108,14 +108,44 @@ test('malformed provider response never grants or revokes', () => {
 test('Google lookup and acknowledgement use the product-scoped API', async () => {
   const adapter = new GoogleAdapter(config);
   const requests = [];
-  adapter.auth = { async request(options) { requests.push(options); return { data: good() }; } };
+  adapter.auth = { async request(options) { requests.push(options); return { data: options.url.includes('voidedpurchases') ? {} : good() }; } };
   assert.equal((await adapter.lookup(body.purchaseToken)).status, 'VERIFIED');
   await adapter.acknowledge(body.purchaseToken);
   const url = `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${PACKAGE_NAME}/purchases/products/${PRODUCT_ID}/tokens/${body.purchaseToken}`;
   assert.equal(requests[0].url, url);
   assert.equal(requests[0].method, 'GET');
-  assert.equal(requests[1].url, `${url}:acknowledge`);
-  assert.equal(requests[1].method, 'POST');
+  assert.match(requests[1].url, /purchases\/voidedpurchases/);
+  assert.equal(requests[2].url, `${url}:acknowledge`);
+  assert.equal(requests[2].method, 'POST');
+});
+test('lookup checks every voided page and fails closed on provider errors', async () => {
+  const adapter = new GoogleAdapter(config);
+  const item = { purchaseToken: body.purchaseToken, voidedTimeMillis: '1767312000000', voidedReason: 7 };
+  const paths = [];
+  adapter.request = async path => {
+    paths.push(path);
+    if (path.startsWith('purchases/products/')) return good();
+    return path.includes('token=next') ? { voidedPurchases: [item] } : { tokenPagination: { nextPageToken: 'next' } };
+  };
+  const result = await adapter.lookup(body.purchaseToken);
+  assert.equal(result.status, 'REFUNDED');
+  assert.equal(result.reason, 'GOOGLE_PLAY_VOIDED_7');
+  assert.equal(result.revokedAt.toISOString(), '2026-01-02T00:00:00.000Z');
+  assert.equal(paths.length, 3);
+  adapter.request = async path => path.startsWith('purchases/products/') ? good() : null;
+  await assert.rejects(adapter.lookup(body.purchaseToken), /Invalid purchase provider response/);
+  adapter.request = async path => path.startsWith('purchases/products/') ? good() : { tokenPagination: { nextPageToken: 'same' } };
+  await assert.rejects(adapter.lookup(body.purchaseToken), /Invalid purchase provider response/);
+});
+test('scheduled void sweep revokes tokens idempotently and prevents replay', async () => {
+  const f = fixture();
+  const verified = await f.service.verify(body);
+  const item = { purchaseToken: body.purchaseToken, voidedTimeMillis: '1767312000000', voidedReason: 7 };
+  f.google.voidedPurchases = async function* () { yield item; };
+  assert.deepEqual(await f.service.sweepVoidedPurchases(), { processed: 1 });
+  assert.deepEqual(await f.service.sweepVoidedPurchases(), { processed: 1 });
+  assert.equal((await f.service.verify(body)).status, 'REVOKED');
+  assert.equal((await f.service.reconcile({ packageName: config.packageName, entitlementId: verified.certificate.payload.entitlementId })).status, 'REVOKED');
 });
 test('same token concurrency returns stable certificate; raw public key verifies canonical mobile format', async () => {
   const f = fixture(); const results = await Promise.all(Array.from({ length: 12 }, () => f.service.verify(body)));

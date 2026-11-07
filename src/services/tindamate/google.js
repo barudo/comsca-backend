@@ -8,9 +8,21 @@ function validatePurchase(data, config, token) {
   if (data.quantity !== undefined && data.quantity !== 1) return malformed();
   if (data.refundableQuantity !== undefined && ![0, 1].includes(data.refundableQuantity)) return malformed();
   const acknowledged = data.acknowledgementState === 1;
-  if (data.purchaseState === 1) return { status: 'REVOKED', acknowledged };
+  if (data.purchaseState === 1) return { status: 'REVOKED', acknowledged, reason: 'GOOGLE_PLAY_CANCELED' };
   if (data.purchaseState === 2) return { status: 'PENDING', acknowledged };
-  return { status: data.refundableQuantity === 0 ? 'REFUNDED' : 'VERIFIED', acknowledged };
+  return data.refundableQuantity === 0
+    ? { status: 'REFUNDED', acknowledged, reason: 'GOOGLE_PLAY_REFUNDED' }
+    : { status: 'VERIFIED', acknowledged };
+}
+function validateVoidedPurchase(item) {
+  if (!item || typeof item.purchaseToken !== 'string' || !item.purchaseToken ||
+      item.purchaseToken.length > 4096 || /[\s\x00-\x1f\x7f]/.test(item.purchaseToken) ||
+      typeof item.voidedTimeMillis !== 'string' || !/^\d+$/.test(item.voidedTimeMillis) ||
+      !Number.isSafeInteger(Number(item.voidedTimeMillis)) ||
+      !Number.isFinite(new Date(Number(item.voidedTimeMillis)).getTime()) ||
+      !Number.isInteger(item.voidedReason) || item.voidedReason < 0 || item.voidedReason > 8)
+    throw new LicensingError(502, 'Invalid purchase provider response');
+  return { status: 'REFUNDED', reason: `GOOGLE_PLAY_VOIDED_${item.voidedReason}`, revokedAt: new Date(Number(item.voidedTimeMillis)) };
 }
 class GoogleAdapter {
   constructor(config) {
@@ -29,7 +41,33 @@ class GoogleAdapter {
   }
   async lookup(token) {
     const data = await this.request(`purchases/products/${encodeURIComponent(this.config.productId)}/tokens/${encodeURIComponent(token)}`);
-    return data === null ? { status: 'INVALID' } : validatePurchase(data, this.config, token);
+    const state = data === null ? { status: 'INVALID' } : validatePurchase(data, this.config, token);
+    if (state.status === 'REVOKED' || state.status === 'REFUNDED') return state;
+    for await (const item of this.voidedPurchases()) {
+      if (item.purchaseToken === token) return validateVoidedPurchase(item);
+    }
+    return state;
+  }
+  async *voidedPurchases() {
+    let token;
+    const seen = new Set();
+    do {
+      const query = new URLSearchParams({ maxResults: '1000', type: '0' });
+      if (token) query.set('token', token);
+      const data = await this.request(`purchases/voidedpurchases?${query}`);
+      if (!data || typeof data !== 'object' ||
+          (data.voidedPurchases !== undefined && !Array.isArray(data.voidedPurchases)) ||
+          (data.tokenPagination !== undefined && (!data.tokenPagination || typeof data.tokenPagination !== 'object')))
+        throw new LicensingError(502, 'Invalid purchase provider response');
+      for (const item of data.voidedPurchases || []) {
+        validateVoidedPurchase(item);
+        yield item;
+      }
+      token = data.tokenPagination?.nextPageToken;
+      if (token !== undefined && (typeof token !== 'string' || !token || seen.has(token)))
+        throw new LicensingError(502, 'Invalid purchase provider response');
+      if (token) seen.add(token);
+    } while (token);
   }
   async acknowledge(token) {
     await this.request(`purchases/products/${this.config.productId}/tokens/${encodeURIComponent(token)}:acknowledge`, 'POST');
@@ -45,4 +83,4 @@ class GoogleAdapter {
     } catch { throw new LicensingError(401, 'Unauthorized'); }
   }
 }
-module.exports = { GoogleAdapter, validatePurchase };
+module.exports = { GoogleAdapter, validatePurchase, validateVoidedPurchase };
