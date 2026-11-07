@@ -1291,6 +1291,17 @@ Set `DATABASE_URL` in `.env.production` to the Supabase transaction pooler
 connection string. Set `MIGRATION_DATABASE_URL` in the same file to the direct
 or session pooler connection string for migrations.
 
+Install the Serverless Framework v3 CLI globally if `serverless` is not already
+available. Version 3.40.0 has previously been used to package this project:
+
+```bash
+npm install --global serverless@3.40.0
+serverless --version
+```
+
+The CLI is not a project dependency; installing only the project dependencies
+does not provide it. The deployment also requires AWS credentials.
+
 ```bash
 npm run migrate:production
 npm run deploy:production
@@ -1298,8 +1309,7 @@ npm run deploy:production
 
 These commands explicitly read `.env.production`. Deployment updates the existing
 `prod` stage (`comsca-backend-prod-api`) in `ap-southeast-1`; the filename does not
-change the stage name. The deployment requires Serverless Framework v3 and AWS
-credentials. Environment files are excluded from the deployment archive.
+change the stage name. Environment files are excluded from the deployment archive.
 
 Application tables have row level security enabled without public API policies.
 The backend uses the database owner connection; browser clients cannot access
