@@ -1,3 +1,4 @@
+const { assertCycleTransactionsUnfrozen } = require("../../dist/services/cycle-freeze");
 const transactionColumns = [
   "id",
   "group_id",
@@ -131,6 +132,7 @@ class GroupAccountTransactionsHandler {
             .forUpdate()
             .first("id");
           if (!cycle) fail("This group has no writable current cycle", 409);
+          await assertCycleTransactionsUnfrozen(cycle.id, trx, { groupId: group_id });
 
           const accounts = await trx("accounts")
             .where({ group_id })

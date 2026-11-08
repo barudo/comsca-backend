@@ -1,3 +1,4 @@
+const { CycleFreezeHandler } = require("../../dist/handlers/cycle-freeze");
 const MePayoutsHandler = require("../handlers/me-payouts");
 const MemberPayoutsHandler = require("../handlers/member-payouts");
 const CycleDistributionsHandler = require("../handlers/cycle-distributions");
@@ -39,6 +40,7 @@ function createRouter(database) {
   const router = express.Router();
   router.use("/api/v1/tindamate/licenses", require("./tindamate-licenses")(database));
   const cycles = new CyclesHandler();
+  const cycleFreeze = new CycleFreezeHandler();
   const mePayouts = new MePayoutsHandler();
   const memberPayouts = new MemberPayoutsHandler();
   const cycleDistributions = new CycleDistributionsHandler();
@@ -152,6 +154,9 @@ function createRouter(database) {
     users.password.bind(users),
   );
   router.get("/api/v1/cycles", authenticate, cycles.list.bind(cycles));
+  router.patch("/api/v1/cycles/:cycleId/freeze", authenticate, cycleFreeze.freeze.bind(cycleFreeze));
+  router.patch("/api/v1/cycles/:cycleId/unfreeze", authenticate, cycleFreeze.unfreeze.bind(cycleFreeze));
+  router.get("/api/v1/cycles/:cycleId/freeze-status", authenticate, cycleFreeze.status.bind(cycleFreeze));
   router.get("/api/v1/dashboard", authenticate, dashboard.get.bind(dashboard));
   router.get(
     "/api/v1/cycles/accounts",

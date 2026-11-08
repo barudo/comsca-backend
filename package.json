@@ -5,12 +5,17 @@
     "main": "src/handler.js",
     "scripts": {
         "start": "node src/server.js",
-        "dev": "nodemon src/server.js",
+        "dev": "nodemon --watch src --ext js,ts --exec \"npm run build && node src/server.js\"",
         "test": "node --test",
         "migrate:latest": "knex migrate:latest",
         "migrate:production": "node scripts/production.js migrate",
         "deploy:production": "node scripts/production.js deploy",
-        "migrate:rollback": "knex migrate:rollback"
+        "migrate:rollback": "knex migrate:rollback",
+        "build": "tsc",
+        "typecheck": "tsc --noEmit",
+        "pretest": "npm run build",
+        "prestart": "npm run build",
+        "predeploy:production": "npm run build"
     },
     "dependencies": {
         "@aws-sdk/client-secrets-manager": "^3.1163.0",
@@ -26,7 +31,10 @@
         "standardwebhooks": "^1.1.1"
     },
     "devDependencies": {
+        "@types/express": "^5.0.6",
+        "@types/node": "^26.6.6",
         "nodemon": "^3.1.10",
-        "tweetnacl": "^1.0.3"
+        "tweetnacl": "^1.0.3",
+        "typescript": "^7.0.2"
     }
 }

@@ -164,6 +164,7 @@ test('distribution accounting: real constraints, loan offsets, blockers, concurr
   // A real void racing declaration must either be included or be refused.
   for (const voidFirst of [true,false]) {
     const race=await fixture();
+    await db('cycles').where({id:race.cycle.id}).update({transactions_frozen:false});
     const source=await race.post('BUY_SHARE','100.00','1000','3000');
     await race.post('BUY_SHARE','100.00','1000','3000',race.users[1].id);
     const req=race.request();req.params.transactionId=source.id;

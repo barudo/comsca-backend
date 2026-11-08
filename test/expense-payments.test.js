@@ -8,6 +8,7 @@ const input = { expenses: [{ id: "10", amount: "100" }, { id: "11", amount: "200
 function fixture(t) {
   const db = knex({ client: "pg" });
   t.after(() => db.destroy());
+  db.isTransaction = true;
   const state = {
     role: "OWNER", cycle: true, counter: "0", sufficient: true, prior: false, error: null, failTable: null,
     expenses: ["10", "11"].map((id, i) => ({ id, group_id: "1", cycle_id: "20", type: "EXPENSE", status: "active", expense_payment_status: "UNPAID", amount: `${(i + 1) * 100}.00` })),
@@ -18,6 +19,7 @@ function fixture(t) {
   let header;
   const builders = new WeakSet();
   const trx = table => { const builder = db(table); builders.add(builder); return builder; };
+  trx.isTransaction = true;
   trx.fn = db.fn;
   trx.raw = (...args) => { const builder = db.raw(...args); builders.add(builder); return builder; };
   Object.defineProperty(db, "transaction", { value: async fn => {
@@ -36,6 +38,10 @@ function fixture(t) {
     if (q.sql.includes('from "groups"')) return { id: q.bindings[0] === "alpha" ? "1" : "2" };
     assert.ok(builders.has(builder), "all payment operations must use the transaction");
     if (q.sql.includes('from "users"')) return q.bindings[1] === "1" ? { id: "1", role: state.role } : undefined;
+    if (q.sql.includes('from "cycles"') && q.sql.includes('"transactions_frozen"')) {
+      assert.match(q.sql, /for update/);
+      return { id: "20", status: state.cycleStatus ?? "active", transactions_frozen: state.frozen ?? false };
+    }
     if (q.sql.includes('from "cycles"')) {
       assert.deepEqual(q.bindings, ["1", "active", 1]);
       assert.match(q.sql, /for update/);

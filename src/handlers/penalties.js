@@ -1,3 +1,4 @@
+const { assertCycleTransactionsUnfrozen } = require("../../dist/services/cycle-freeze");
 const transactionColumns = [
   "id",
   "group_id",
@@ -109,6 +110,7 @@ class PenaltiesHandler {
             .forUpdate()
             .first("id");
           if (!cycle) fail("This group has no current cycle", 409);
+          await assertCycleTransactionsUnfrozen(cycle.id, trx, { groupId: group_id });
           const member = await trx("cycle_members")
             .join("users", "users.id", "cycle_members.user_id")
             .where({

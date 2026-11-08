@@ -7,6 +7,7 @@ const { createApp } = require("../src/app");
 function fixture(t) {
   const db = knex({ client: "pg" });
   t.after(() => db.destroy());
+  db.isTransaction = true;
   const state = { role: "OWNER", header: { id: "42", group_id: "1", cycle_id: "20", status: "active", amount: "9999999999999999.99", document_number: "9007199254740993" }, reversals: 0, queries: [], link: false, error: null };
   Object.defineProperty(db, "transaction", { value: async fn => {
     const before = { header: { ...state.header }, reversals: state.reversals };
@@ -17,6 +18,10 @@ function fixture(t) {
     const q = builder.toSQL(); state.queries.push(q);
     if (q.sql.includes('from "groups"')) return { id: q.bindings[0] === "alpha" ? "1" : "2" };
     if (q.sql.includes('from "users"')) return { id: "7", role: state.role };
+    if (q.sql.includes('from "cycles"') && q.sql.includes('"transactions_frozen"')) {
+      assert.match(q.sql, /for update/);
+      return { id: "20", status: state.cycleStatus ?? "active", transactions_frozen: state.frozen ?? false };
+    }
     if (q.sql.includes('from "cycles"')) { assert.match(q.sql, /for update$/); return { id: "20" }; }
     if (q.sql.includes('from "transactions"')) {
       assert.deepEqual(q.bindings, [state.header.group_id === "1" ? q.bindings[0] : "1", q.bindings[1], 1]);

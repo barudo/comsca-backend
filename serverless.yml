@@ -27,6 +27,8 @@ package:
   # excludes all runtime dependencies. Keep installed dependencies in the ZIP.
   excludeDevDependencies: false
   patterns:
+    - 'dist/**'
+    - '!src/**/*.ts'
     - '!.env*'
     - '!test/**'
     - '!scripts/**'

@@ -7,6 +7,7 @@ const { createApp } = require("../src/app");
 function fixture(t) {
   const db = knex({ client: "pg" });
   t.after(() => db.destroy());
+  db.isTransaction = true;
   const state = { role: "OWNER", voucherCounter: "0", cycle: true, members: [{ user_id: "11" }, { user_id: "12" }, { user_id: "13" }], error: null,
     accounts: [{ id: "101", cycle_id: "20", type: "ASSET", code: "1400" },
       { id: "102", cycle_id: "20", type: "INCOME", code: "4400" }],
@@ -31,6 +32,10 @@ function fixture(t) {
       assert.match(q.sql, /"group_id" = \?.*for share/);
       assert.equal(q.bindings[0], "1");
       return state.accounts.filter(account => q.bindings.slice(1).includes(account.id));
+    }
+    if (q.sql.includes('from "cycles"') && q.sql.includes('"transactions_frozen"')) {
+      assert.match(q.sql, /for update/);
+      return { id: "20", status: state.cycleStatus ?? "active", transactions_frozen: state.frozen ?? false };
     }
     if (q.sql.includes('from "cycles"')) {
       assert.deepEqual(q.bindings, ["1", "draft", "active", 1]);

@@ -106,7 +106,7 @@ class CyclesHandler {
       const cycles = await db.transaction(async trx => {
         await trx.raw("SET LOCAL ROLE comsca_group_reader");
         await trx.raw("SELECT set_config('app.group_id', ?, true)", [String(request.group.id)]);
-        return trx("cycles").where({ group_id: request.group.id }).select(allCycleColumns)
+        return trx("cycles").where({ group_id: request.group.id }).select([...allCycleColumns, "transactions_frozen"])
           .whereIn("status", ["draft", "distributing", "active"])
           .orderBy("created_at", "desc").orderBy("id", "desc").limit(1);
       });

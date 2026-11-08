@@ -7,6 +7,7 @@ const { createApp } = require("../src/app");
 function fixture(t) {
   const db = knex({ client: "pg" });
   t.after(() => db.destroy());
+  db.isTransaction = true;
   const state = {
     role: "OWNER",
     cycle: true,
@@ -34,6 +35,7 @@ function fixture(t) {
     transactionBuilders.add(builder);
     return builder;
   };
+  trx.isTransaction = true;
   trx.fn = db.fn;
   trx.raw = db.raw.bind(db);
   Object.defineProperty(db, "transaction", {
@@ -85,6 +87,10 @@ function fixture(t) {
         return state.accounts.filter((account) =>
           q.bindings.slice(1).includes(account.id),
         );
+      }
+      if (q.sql.includes('from "cycles"') && q.sql.includes('"transactions_frozen"')) {
+        assert.match(q.sql, /for update/);
+        return { id: "20", status: state.cycleStatus ?? "active", transactions_frozen: state.frozen ?? false };
       }
       if (q.sql.includes('from "cycles"')) {
         assert.deepEqual(q.bindings, ["1", "active", 1]);

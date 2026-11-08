@@ -9,3 +9,6 @@ node_modules/
 _bmad/**/config.user.toml
 _bmad/**/__pycache__/
 .agents/**/__pycache__/
+
+# Compiled TypeScript feature modules
+dist/

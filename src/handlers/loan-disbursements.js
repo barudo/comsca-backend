@@ -1,3 +1,4 @@
+const { assertCycleTransactionsUnfrozen } = require("../../dist/services/cycle-freeze");
 const transactionColumns = [
   "id",
   "group_id",
@@ -103,6 +104,19 @@ class LoanDisbursementsHandler {
             );
           }
           const input = disbursementInput(request.body);
+          const cycle = await trx("cycles")
+            .where({ group_id })
+            .whereIn("status", ["active"])
+            .orderBy("created_at", "desc")
+            .orderBy("id", "desc")
+            .forUpdate()
+            .first("id");
+          if (!cycle) fail("A current writable cycle is required for a loan disbursement", 409);
+          await assertCycleTransactionsUnfrozen(cycle.id, trx, { groupId: group_id });
+          const cycle_id = cycle.id;
+          if (input.cycle_id !== null && String(input.cycle_id) !== String(cycle_id)) {
+            fail("Selected cycle must be the group's current cycle");
+          }
           const accounts = await trx("accounts")
             .where({ group_id })
             .whereIn("id", [input.debit, input.credit])
@@ -121,18 +135,6 @@ class LoanDisbursementsHandler {
             fail("Debit must be Loans Receivable (1100), an ASSET account");
           if (credit.type !== "ASSET")
             fail("Credit must be an ASSET funding account");
-          const cycle = await trx("cycles")
-            .where({ group_id })
-            .whereIn("status", ["active"])
-            .orderBy("created_at", "desc")
-            .orderBy("id", "desc")
-            .forUpdate()
-            .first("id");
-          if (!cycle) fail("A current writable cycle is required for a loan disbursement", 409);
-          const cycle_id = cycle.id;
-          if (input.cycle_id !== null && String(input.cycle_id) !== String(cycle_id)) {
-            fail("Selected cycle must be the group's current cycle");
-          }
           if (
             accounts.some(
               (account) =>

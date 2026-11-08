@@ -7,6 +7,7 @@ const { createApp } = require("../src/app");
 function fixture(t) {
   const db = knex({ client: "pg" });
   t.after(() => db.destroy());
+  db.isTransaction = true;
   const state = { role: "OWNER", cycle: true, cycleStatus: "active", member: true, membership: true, error: null,
     accounts: [{ id: "101", cycle_id: "20", type: "ASSET", code: "1000" },
       { id: "102", cycle_id: "20", type: "ASSET", code: "1100" },
@@ -55,6 +56,10 @@ function fixture(t) {
       state.receiptCounter = String(BigInt(state.receiptCounter) + 1n);
       return [{ receipt_counter: state.receiptCounter }];
     }
+    if (q.sql.includes('from "cycles"') && q.sql.includes('"transactions_frozen"')) {
+      assert.match(q.sql, /for update/);
+      return { id: "20", status: state.cycleStatus ?? "active", transactions_frozen: state.frozen ?? false };
+    }
     if (q.sql.includes('from "cycles"')) {
       if (q.sql.includes('"status" =')) {
         assert.match(q.sql, /for update/);
@@ -62,8 +67,8 @@ function fixture(t) {
         return state.cycle && state.cycleStatus === "active" ? { id: "20" } : undefined;
       }
       if (q.sql.includes('"status" in')) {
-        assert.deepEqual(q.bindings.slice(0, 3), ["1", "active", "distributing"]);
-        return state.cycle && ["active", "distributing"].includes(state.cycleStatus) ? { id: "20" } : undefined;
+        assert.deepEqual(q.bindings, ["1", "active", 1]);
+        return state.cycle && state.cycleStatus === "active" ? { id: "20" } : undefined;
       }
       assert.equal(q.bindings[1], "1");
       return state.cycle ? { id: q.bindings[0] } : undefined;
@@ -245,6 +250,7 @@ test("payments POST enforces a shared cycle and group member cycle membership", 
   assert.equal((await post({ ...input, cycle_id: "20" })).status, 201);
   state.cycle = false;
   assert.equal((await post({ ...input, cycle_id: "20" })).status, 409);
+  state.cycle = true;
   state.accounts = [];
   assert.equal((await post(input)).status, 404);
 });
@@ -335,7 +341,7 @@ test("donations POST requires a writable cycle and an authorized financial write
   const donation = { debit: "110", credit: "111", amount: "10.00", date: "2026-10-03" };
   for (const role of ["OWNER", "ADMIN", "TREASURER"]) {
     state.role = role;
-    state.cycleStatus = role === "TREASURER" ? "distributing" : "active";
+    state.cycleStatus = "active";
     assert.equal((await post(donation, {}, undefined, path)).status, 201);
   }
   state.writes.length = 0;
@@ -344,7 +350,7 @@ test("donations POST requires a writable cycle and an authorized financial write
     assert.equal((await post(donation, {}, undefined, path)).status, 403);
   }
   state.role = "OWNER";
-  for (const status of ["draft", "closed"]) {
+  for (const status of ["draft", "distributing", "closed"]) {
     state.cycleStatus = status;
     assert.equal((await post(donation, {}, undefined, path)).status, 409);
   }
@@ -463,7 +469,7 @@ test("add-expense requires authenticated scoped writers and a writable cycle", a
   const { state, post } = fixture(t);
   for (const role of ["OWNER", "ADMIN", "TREASURER"]) {
     state.role = role;
-    for (const cycleStatus of ["active", "distributing"]) {
+    for (const cycleStatus of ["active"]) {
       state.cycleStatus = cycleStatus;
       assert.equal((await post(expense, {}, undefined, expensePath)).status, 201);
     }
@@ -476,7 +482,7 @@ test("add-expense requires authenticated scoped writers and a writable cycle", a
   state.role = "OWNER";
   assert.equal((await post(expense, { authorization: "" }, undefined, expensePath)).status, 401);
   assert.equal((await post(expense, { "x-group-slug": "beta" }, undefined, expensePath)).status, 403);
-  for (const cycleStatus of ["draft", "closed"]) {
+  for (const cycleStatus of ["draft", "distributing", "closed"]) {
     state.cycleStatus = cycleStatus;
     assert.equal((await post(expense, {}, undefined, expensePath)).status, 409);
   }

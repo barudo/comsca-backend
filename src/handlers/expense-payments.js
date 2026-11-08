@@ -1,3 +1,4 @@
+const { assertCycleTransactionsUnfrozen } = require("../../dist/services/cycle-freeze");
 function fail(message, status = 400) {
   throw Object.assign(new Error(message), { status });
 }
@@ -64,6 +65,7 @@ class ExpensePaymentsHandler {
           .whereIn("status", ["active"])
           .orderBy("created_at", "desc").orderBy("id", "desc").forUpdate().first("id");
         if (!cycle) fail("This group has no writable current cycle", 409);
+        await assertCycleTransactionsUnfrozen(cycle.id, trx, { groupId: group_id });
         const ids = input.expenses.map(item => item.id);
         const expenses = await trx("transactions").where({ group_id, cycle_id: cycle.id, type: "EXPENSE" })
           .whereIn("id", ids).orderBy("id").forUpdate().select("*");

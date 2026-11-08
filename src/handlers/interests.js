@@ -1,3 +1,4 @@
+const { assertCycleTransactionsUnfrozen } = require("../../dist/services/cycle-freeze");
 const transactionColumns = [
   "id",
   "group_id",
@@ -129,6 +130,7 @@ class InterestsHandler {
             .first("id", "interest_rate", "interest_period", "interest_method");
           if (!cycle)
             fail("An active cycle is required to charge interest", 409);
+          await assertCycleTransactionsUnfrozen(cycle.id, trx, { groupId: group_id });
           if (
             cycle.interest_rate === null ||
             cycle.interest_period === null ||

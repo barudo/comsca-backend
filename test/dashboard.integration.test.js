@@ -34,7 +34,7 @@ test(
     db = knex({ client: "pg", connection: url.toString() });
     await db.raw(`CREATE TABLE groups(id bigserial PRIMARY KEY);
     CREATE TABLE cycles(id bigserial PRIMARY KEY, group_id bigint REFERENCES groups(id),
-      status text NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+      status text NOT NULL, transactions_frozen boolean NOT NULL DEFAULT true, created_at timestamptz NOT NULL DEFAULT now());
     CREATE TABLE users(id bigserial PRIMARY KEY, group_id bigint REFERENCES groups(id),
       auth_user_id text, password text, first_name text, family_name text, username text,
       email text, phone text, address text, role text,
@@ -60,7 +60,7 @@ test(
 
     await db("groups").insert([{ id: 1 }, { id: 2 }]);
     await db("cycles").insert([
-      { id: 20, group_id: 1, status: "active", created_at: "2026-01-01" },
+      { id: 20, group_id: 1, status: "active", transactions_frozen: false, created_at: "2026-01-01" },
       { id: 21, group_id: 1, status: "closed", created_at: "2026-02-01" },
       { id: 30, group_id: 2, status: "active", created_at: "2026-03-01" },
     ]);

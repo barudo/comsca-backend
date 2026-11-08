@@ -1672,7 +1672,7 @@ test(
           ])
           .returning("id");
         const [cycle] = await db("cycles")
-          .insert({ group_id: group.id, status: "active" })
+          .insert({ group_id: group.id, status: "active", transactions_frozen: false })
           .returning("id");
         await db("cycle_members").insert({
           cycle_id: cycle.id,
@@ -2117,7 +2117,7 @@ test(
           ])
           .returning("id");
         const [cycle] = await db("cycles")
-          .insert({ group_id: group.id, status: "active" })
+          .insert({ group_id: group.id, status: "active", transactions_frozen: false })
           .returning("id");
         await db("cycle_members").insert({
           cycle_id: cycle.id,
@@ -2421,7 +2421,7 @@ test(
         const [cycle] = await db("cycles")
           .insert({
             group_id: group.id,
-            status: "active",
+            status: "active", transactions_frozen: false,
             interest_rate: "2.500000",
             interest_period: "MONTHLY",
             interest_method: "SIMPLE",
@@ -2711,7 +2711,7 @@ test(
       const authId = "afafafaf-afaf-4faf-8faf-afafafafafaf";
       await db("auth.users").insert({ id: authId });
       await db("users").insert({ group_id: group.id, auth_user_id: authId, first_name: "Expense", family_name: "Treasurer", role: "TREASURER" });
-      const [cycle] = await db("cycles").insert({ group_id: group.id, status: "active" }).returning("id");
+      const [cycle] = await db("cycles").insert({ group_id: group.id, status: "active", transactions_frozen: false }).returning("id");
       const accounts = await db("accounts").where({ cycle_id: cycle.id });
       const cash = accounts.find(row => row.code === "1000");
       const payable = accounts.find(row => row.type === "LIABILITY");
@@ -2803,7 +2803,7 @@ test(
           .insert({ group_id: group.id, status: "closed" })
           .returning("id");
         const [cycle] = await db("cycles")
-          .insert({ group_id: group.id, status: "active" })
+          .insert({ group_id: group.id, status: "active", transactions_frozen: false })
           .returning("id");
         await db("cycle_members").insert([
           ...members
@@ -3039,7 +3039,7 @@ test(
           ])
           .returning("id");
         const [cycle] = await db("cycles")
-          .insert({ group_id: group.id, status: "active" })
+          .insert({ group_id: group.id, status: "active", transactions_frozen: false })
           .returning("id");
         await db("cycle_members").insert(
           members.map((member) => ({ cycle_id: cycle.id, user_id: member.id })),
@@ -3516,7 +3516,8 @@ test(
               .orderBy("id", "desc");
             assert.deepEqual(
               result.body.cycles,
-              JSON.parse(JSON.stringify(saved)),
+              JSON.parse(JSON.stringify(saved.map(({ transactions_frozen_at, transactions_frozen_by,
+                transactions_unfrozen_at, transactions_unfrozen_by, ...cycle }) => cycle))),
             );
             assert.equal(
               result.body.cycles[0].receipt_counter,

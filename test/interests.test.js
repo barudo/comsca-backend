@@ -7,6 +7,7 @@ const { createApp } = require("../src/app");
 function fixture(t) {
   const db = knex({ client: "pg" });
   t.after(() => db.destroy());
+  db.isTransaction = true;
   const state = {
     role: "OWNER",
     voucherCounter: "0",
@@ -59,6 +60,10 @@ function fixture(t) {
         return query.sql.includes('"auth_user_id"') && query.bindings[1] === "1"
           ? { id: "10", role: state.role }
           : undefined;
+      }
+      if (query.sql.includes('from "cycles"') && query.sql.includes('"transactions_frozen"')) {
+        assert.match(query.sql, /for update/);
+        return { id: "20", status: "active", transactions_frozen: state.frozen ?? false };
       }
       if (query.sql.includes('from "cycles"')) return state.cycle;
       if (query.sql.includes('from "accounts"')) {

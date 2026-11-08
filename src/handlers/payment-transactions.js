@@ -1,3 +1,4 @@
+const { assertCycleTransactionsUnfrozen } = require("../../dist/services/cycle-freeze");
 const transactionColumns = ["id", "group_id", "cycle_id", "user_id", "type", "amount",
   "description", "document_type", "document_number", "occurred_at", "created_at", "updated_at"];
 
@@ -82,6 +83,13 @@ class PaymentTransactionsHandler {
           fail("Only an OWNER, ADMIN or TREASURER of this group can post payments", 403);
         }
         const input = paymentInput(request.body);
+        const cycle = await trx("cycles").where({ group_id, status: "active" }).forUpdate().first("id");
+        if (!cycle) fail("An active cycle is required for a member payment", 409);
+        await assertCycleTransactionsUnfrozen(cycle.id, trx, { groupId: group_id });
+        const cycle_id = cycle.id;
+        if (input.cycle_id !== null && String(input.cycle_id) !== String(cycle_id)) {
+          fail("Selected cycle must be the group's active cycle");
+        }
         const accountIds = [...new Set(input.entries.flatMap(entry => [entry.debit, entry.credit]))];
         const accounts = await trx("accounts").where({ group_id }).whereIn("id", accountIds)
           .orderBy("id").forShare().select("id", "cycle_id", "type", "code");
@@ -92,12 +100,6 @@ class PaymentTransactionsHandler {
           if (!debit || !credit) fail("Selected accounts were not found in this group", 404);
           if (debit.type !== "ASSET") fail("Debit must be an ASSET account");
           if (!creditRules[entry.type](credit)) fail(`Invalid credit account for ${entry.type}`);
-        }
-        const cycle = await trx("cycles").where({ group_id, status: "active" }).forUpdate().first("id");
-        if (!cycle) fail("An active cycle is required for a member payment", 409);
-        const cycle_id = cycle.id;
-        if (input.cycle_id !== null && String(input.cycle_id) !== String(cycle_id)) {
-          fail("Selected cycle must be the group's active cycle");
         }
         if (accounts.some(account => account.cycle_id !== null && String(account.cycle_id) !== String(cycle_id))) {
           fail("Selected accounts must belong to the transaction cycle");

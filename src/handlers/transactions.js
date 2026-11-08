@@ -1,3 +1,4 @@
+const { assertCycleTransactionsUnfrozen } = require("../../dist/services/cycle-freeze");
 function fail(message, status) {
   throw Object.assign(new Error(message), { status });
 }
@@ -18,11 +19,7 @@ class TransactionsHandler {
         }
         const scope = await trx("transactions").where({ group_id, id }).first("cycle_id");
         if (!scope) fail("Transaction not found", 404);
-        // Match expense-payment lock ordering before locking the header.
-        if (scope.cycle_id !== null) {
-          const cycle = await trx("cycles").where({ group_id, id: scope.cycle_id }).forUpdate().first("id", "status");
-          if (cycle && ["distributing", "closed"].includes(cycle.status)) fail("Transactions in a distributing or closed cycle are read-only", 409);
-        }
+        await assertCycleTransactionsUnfrozen(scope.cycle_id, trx, { groupId: group_id });
         const header = await trx("transactions").where({ group_id, id }).forUpdate().first("*");
         if (!header) fail("Transaction not found", 404);
         if (header.cycle_id !== scope.cycle_id) fail("Transaction cycle changed; refresh and retry", 409);

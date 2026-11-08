@@ -434,7 +434,8 @@ test('transaction voids enforce exact linked reversals and serialize concurrent 
   const url = new URL(process.env.TEST_DATABASE_URL); url.pathname = `/${name}`;
   db = knex({ client: 'pg', connection: url.toString(), pool: { min: 0, max: 5 } });
   await db.raw(`CREATE TABLE groups(id bigserial PRIMARY KEY);
-    CREATE TABLE cycles(id bigserial PRIMARY KEY,group_id bigint REFERENCES groups(id));
+    CREATE TABLE cycles(id bigserial PRIMARY KEY,group_id bigint REFERENCES groups(id),
+      status text NOT NULL DEFAULT 'active', transactions_frozen boolean NOT NULL DEFAULT true);
     CREATE TABLE users(id bigserial PRIMARY KEY,group_id bigint REFERENCES groups(id),auth_user_id text,role text);
     CREATE TABLE cycle_members(cycle_id bigint REFERENCES cycles(id),user_id bigint REFERENCES users(id),PRIMARY KEY(cycle_id,user_id));`);
   for (const file of ['005_create_transactions','006_create_accounts_and_transaction_entries','018_scope_account_ledger',
@@ -448,7 +449,7 @@ test('transaction voids enforce exact linked reversals and serialize concurrent 
   await db.transaction(trx => voids.up(trx));
   await db('groups').insert([{ id: 1 }, { id: 2 }]);
   await db('users').insert({ group_id: 1, auth_user_id: 'actor', role: 'OWNER' });
-  await db('cycles').insert({ id: 1, group_id: 1 });
+  await db('cycles').insert({ id: 1, group_id: 1, transactions_frozen: false });
   const accounts = await db('accounts').insert([
     { group_id: 1, code: '1000', name: 'Cash', type: 'ASSET' },
     { group_id: 1, code: '1100', name: 'Loans', type: 'ASSET' },
