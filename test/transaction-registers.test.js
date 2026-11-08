@@ -7,7 +7,8 @@ const { createApp } = require("../src/app");
 function fixture(t) {
   const db = knex({ client: "pg" });
   t.after(() => db.destroy());
-  const state = { role: "OWNER", member: true, total: "0", rows: [], queries: [], error: null };
+  const state = { role: "OWNER", member: true, total: "0", rows: [], queries: [], error: null,
+    cycles: [{ id: "42", group_id: "1", status: "active" }] };
   Object.defineProperty(db, "transaction", { value: async fn => fn(db) });
   db.client.runner = builder => ({ run: async () => {
     const q = builder.toSQL(); state.queries.push(q);
@@ -19,7 +20,12 @@ function fixture(t) {
       assert.equal(q.bindings[0], "auth-user");
       return state.member && q.bindings[1] === "1" ? { id: "1", role: state.role } : undefined;
     }
-    assert.match(q.sql, /from "transactions" where "group_id" = \? and "document_type" in .* and "document_number" is not null/);
+    if (q.sql.includes('from "cycles"')) {
+      assert.match(q.sql, /where "group_id" = \? and "status" in \(\?, \?\) order by "created_at" desc, "id" desc limit \?/);
+      assert.deepEqual(q.bindings, ["1", "active", "distributing", 1]);
+      return state.cycles.find(c => c.group_id === q.bindings[0] && q.bindings.slice(1, 3).includes(c.status));
+    }
+    assert.match(q.sql, /from "transactions" where "group_id" = \? and "cycle_id" = \? and "document_type" in .* and "document_number" is not null/);
     assert.equal(q.bindings[0], "1");
     if (state.error) throw state.error;
     if (q.sql.includes("count(*)")) return { total: state.total };
@@ -43,9 +49,9 @@ test("registers default to all numbered documents, descending dates and paginate
   assert.deepEqual(result, { status: 200, body: { success: true, data: state.rows, pagination: { page: 1, per_page: 25, total: 26, total_pages: 2 } } });
   const queries = state.queries.filter(q => q.sql.includes('from "transactions"'));
   assert.equal(queries.length, 2);
-  assert.deepEqual(queries[0].bindings, ["1", "RECEIPT", "PAYMENT_RECEIPT", "DISBURSEMENT_VOUCHER", "JOURNAL_VOUCHER", 1]);
+  assert.deepEqual(queries[0].bindings, ["1", "42", "RECEIPT", "PAYMENT_RECEIPT", "DISBURSEMENT_VOUCHER", "JOURNAL_VOUCHER", 1]);
   assert.match(queries[1].sql, /order by "occurred_at" desc nulls last, "id" desc limit \?/);
-  assert.deepEqual(queries[1].bindings, ["1", "RECEIPT", "PAYMENT_RECEIPT", "DISBURSEMENT_VOUCHER", "JOURNAL_VOUCHER", 25]);
+  assert.deepEqual(queries[1].bindings, ["1", "42", "RECEIPT", "PAYMENT_RECEIPT", "DISBURSEMENT_VOUCHER", "JOURNAL_VOUCHER", 25]);
 });
 
 test("registers map PR DV JV filters and preserve matching count and page scopes", async t => {
@@ -57,11 +63,45 @@ test("registers map PR DV JV filters and preserve matching count and page scopes
     assert.equal(result.status, 200);
     assert.deepEqual(result.body.pagination, { page: 2, per_page: 2, total: 5, total_pages: 3 });
     const queries = state.queries.filter(q => q.sql.includes('from "transactions"'));
-    assert.deepEqual(queries[0].bindings, ["1", ...types, 1]);
-    assert.deepEqual(queries[1].bindings, ["1", ...types, 2, 2]);
+    assert.deepEqual(queries[0].bindings, ["1", "42", ...types, 1]);
+    assert.deepEqual(queries[1].bindings, ["1", "42", ...types, 2, 2]);
     assert.match(queries[1].sql, /order by "document_number" asc nulls last, "id" asc limit \? offset \?/);
   }
   assert.equal((await get("document=")).status, 200);
+});
+
+test("registers use only the group's active or distributing cycle", async t => {
+  const { state, get } = fixture(t);
+  for (const status of ["active", "distributing"]) {
+    state.cycles = [
+      { id: "99", group_id: "2", status: "active" },
+      { id: "41", group_id: "1", status: "closed" },
+      { id: "42", group_id: "1", status },
+    ];
+    state.queries = [];
+    assert.equal((await get()).status, 200);
+    const queries = state.queries.filter(q => q.sql.includes('from "transactions"'));
+    assert.equal(queries.length, 2);
+    for (const query of queries) assert.deepEqual(query.bindings.slice(0, 2), ["1", "42"]);
+  }
+});
+
+test("registers return an empty page without querying transactions for closed, draft or absent cycles", async t => {
+  const { state, get } = fixture(t);
+  for (const cycles of [
+    [{ id: "41", group_id: "1", status: "closed" }],
+    [{ id: "42", group_id: "1", status: "draft" }],
+    [{ id: "99", group_id: "2", status: "active" }],
+    [],
+  ]) {
+    state.cycles = cycles;
+    state.queries = [];
+    assert.deepEqual(await get("page=2&per_page=5"), {
+      status: 200, body: { success: true, data: [], pagination: { page: 2, per_page: 5, total: 0, total_pages: 0 } },
+    });
+    assert.ok(!state.queries.some(q => q.sql.includes('from "transactions"')));
+    assert.equal((await get("document=OTHER")).status, 400);
+  }
 });
 
 test("registers support whitelisted sorts and empty/out-of-range pages", async t => {

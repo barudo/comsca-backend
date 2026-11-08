@@ -51,8 +51,14 @@ class TransactionRegistersHandler {
           throw Object.assign(new Error("Only an OWNER or ADMIN of this group can view transaction registers"), { status: 403 });
         }
         const input = parse(request.query);
+        const cycle = await trx("cycles").where({ group_id })
+          .whereIn("status", ["active", "distributing"])
+          .orderBy("created_at", "desc").orderBy("id", "desc").first("id");
+        if (!cycle) return { success: true, data: [], pagination: {
+          page: input.page, per_page: input.per_page, total: 0, total_pages: 0,
+        } };
         const types = input.document ? documents[input.document] : Object.values(documents).flat();
-        const base = trx("transactions").where({ group_id })
+        const base = trx("transactions").where({ group_id, cycle_id: cycle.id })
           .whereIn("document_type", types).whereNotNull("document_number");
         const count = await base.clone().count("* as total").first();
         const total = Number(count.total);

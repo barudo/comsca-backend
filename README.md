@@ -562,8 +562,10 @@ group. Other roles receive 403.
 Example: `GET /api/v1/transactions/registers?document=JV&per_page=25&page=1&sorty_by=document_number&order=desc`.
 
 Invalid values or repeated supported parameters return 400. Results contain
-transaction rows with non-null document numbers in the selected group, across
-all cycles and including active and voided transactions. Undocumented
+transaction rows with non-null document numbers in the selected group's current
+active or distributing cycle, including active and voided transactions. If no
+such cycle exists, including when the latest cycle is closed or the current
+cycle is a draft, `data` is empty and the total is zero. Undocumented
 transactions are excluded. Sorting places null values last and uses `id` in
 the same direction to break ties. Group query parameters do not override the
 header-selected group.
