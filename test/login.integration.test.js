@@ -2897,6 +2897,14 @@ test(
             ),
           );
         const before = await counts();
+        const [otherGroup] = await db("groups").insert({ name: "Other contribution group", slug: "other-contribution-group" }).returning("id");
+        const [otherMember] = await db("users").insert({ group_id: otherGroup.id, first_name: "Other", family_name: "Member", role: "MEMBER" }).returning("id");
+        for (const excludedId of [members[4].id, members[5].id, otherMember.id]) {
+          const rejected = await handler(event({ ...input, user_ids: [members[0].id, excludedId] }), {});
+          assert.equal(rejected.statusCode, 400);
+          assert.deepEqual(await counts(), before);
+          assert.equal(await journalCounter(), "1");
+        }
         await db.raw(`CREATE FUNCTION public.reject_test_contribution_credit() RETURNS trigger LANGUAGE plpgsql AS $$
       BEGIN IF NEW.account_id = ${credit.id} THEN RAISE EXCEPTION 'Test contribution posting rejection' USING ERRCODE='23514'; END IF; RETURN NEW; END $$;
       CREATE TRIGGER test_contribution_failure BEFORE INSERT ON public.account_entries

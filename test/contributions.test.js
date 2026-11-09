@@ -79,6 +79,65 @@ function fixture(t) {
 }
 const input = { debit: "101", credit: "102", amount: "25.50" };
 
+test("charge targets selected members once and totals only their balanced postings", async t => {
+  const { state, post } = fixture(t);
+  for (const [user_ids, expected] of [[[12], ["12"]], [["13", 11, "11"], ["11", "13"]]]) {
+    const result = await post({ ...input, user_ids });
+    assert.equal(result.status, 201);
+    assert.deepEqual(result.body.entries.map(entry => entry.user_id), expected);
+    assert.equal(result.body.transaction.amount, expected.length === 1 ? "25.50" : "51.00");
+    assert.equal(result.body.account_entries.length, expected.length * 2);
+    for (const entry of result.body.entries) {
+      assert.equal(entry.amount, "25.50");
+      assert.deepEqual(result.body.account_entries.filter(p => p.transaction_entry_id === entry.id)
+        .map(p => [p.account_id, p.amount]), [["101", "25.50"], ["102", "-25.50"]]);
+    }
+  }
+  assert.equal(state.voucherCounter, "2");
+});
+
+test("charge rejects invalid or unenrolled selections before writes", async t => {
+  const { state, post } = fixture(t);
+  for (const user_ids of [null, [], "11", 11, {}, [null], [true], [[]], [{}], [0], [-1], [1.5],
+    ["01"], ["9223372036854775808"], [9007199254740992], ["999"], ["11", "999"]]) {
+    assert.equal((await post({ ...input, user_ids })).status, 400, JSON.stringify(user_ids));
+    assert.equal(state.writes.length, 0);
+    assert.equal(state.voucherCounter, "0");
+  }
+});
+
+test("selected contribution charges preserve freeze and rollback guards", async t => {
+  const { state, post } = fixture(t);
+  state.frozen = true;
+  assert.equal((await post({ ...input, user_ids: ["11"] })).status, 423);
+  assert.equal(state.writes.length, 0);
+  assert.equal(state.voucherCounter, "0");
+  state.frozen = false;
+  state.failTable = "account_entries";
+  assert.equal((await post({ ...input, user_ids: ["11"] })).status, 409);
+  assert.equal(state.writes.length, 0);
+  assert.equal(state.voucherCounter, "0");
+});
+
+test("selection preserves bigint IDs and applies overflow to selected population", async t => {
+  const { state, post } = fixture(t);
+  state.members = [{ user_id: "9007199254740993" }, { user_id: "12" }];
+  const selected = { ...input, amount: "9999999999999999.99", user_ids: ["9007199254740993"] };
+  const result = await post(selected);
+  assert.equal(result.status, 201);
+  assert.equal(result.body.entries[0].user_id, "9007199254740993");
+  assert.equal(result.body.transaction.amount, selected.amount);
+  const before = state.writes.length;
+  assert.equal((await post({ ...selected, user_ids: [...selected.user_ids, "12"] })).status, 400);
+  assert.equal(state.writes.length, before);
+  assert.equal(state.voucherCounter, "1");
+  state.members = [];
+  assert.equal((await post({ ...input, user_ids: ["12"] })).status, 400);
+  assert.equal((await post(input)).status, 409);
+  assert.equal(state.writes.length, before);
+  assert.equal(state.voucherCounter, "1");
+});
+
 test("charge creates a group header and balanced member entries for every financial writer", async t => {
   const { state, post } = fixture(t);
   for (const role of ["OWNER", "ADMIN", "TREASURER"]) {

@@ -1572,6 +1572,13 @@ current defaults for an older cycle with the existing PostgreSQL function
 reject conflicting reserved account definitions. The charge endpoint does not
 backfill accounts.
 
+`user_ids` is optional: omit it to charge every enrolled member, or supply a
+non-empty array such as `["11", "12"]` to charge only those members. IDs may be
+positive integer numbers or decimal ID strings; duplicate IDs are charged once.
+Every selected user must belong to this group's current cycle. Invalid IDs,
+non-array or empty selections, and selections containing unenrolled users return
+400 without creating charges or consuming a voucher number.
+
 `description` is optional (up to 4000 characters); other fields are rejected.
 The current cycle is the newest non-closed cycle, ordered by creation time and ID.
 

@@ -29,7 +29,12 @@ function description(value) {
 }
 
 function contributionInput(body) {
-  record(body, ["description", "debit", "credit", "amount"], "contribution charge");
+  record(body, ["description", "debit", "credit", "amount", "user_ids"], "contribution charge");
+  let user_ids = null;
+  if (body.user_ids !== undefined) {
+    if (!Array.isArray(body.user_ids) || !body.user_ids.length) fail("user_ids must be a non-empty array of positive IDs");
+    user_ids = new Set(body.user_ids.map(value => id(value, "user_ids")));
+  }
   const debit = id(body.debit, "debit");
   const credit = id(body.credit, "credit");
   if (debit === credit) fail("Debit and credit must use different accounts");
@@ -42,7 +47,7 @@ function contributionInput(body) {
   const whole = match[1].replace(/^0+/, "") || "0";
   const fraction = (match[2] || "").padEnd(2, "0");
   if (whole.length > 16 || !/[1-9]/.test(whole + fraction)) fail("amount must be greater than zero and fit numeric(18,2)");
-  return { debit, credit, amount: `${whole}.${fraction}`, description: description(body.description) };
+  return { debit, credit, amount: `${whole}.${fraction}`, description: description(body.description), user_ids };
 }
 
 class ContributionsHandler {
@@ -62,9 +67,13 @@ class ContributionsHandler {
           .orderBy("created_at", "desc").orderBy("id", "desc").forUpdate().first("id");
         if (!cycle) fail("This group has no current cycle", 409);
         await assertCycleTransactionsUnfrozen(cycle.id, trx, { groupId: group_id });
-        const members = await trx("cycle_members").join("users", "users.id", "cycle_members.user_id")
+        let members = await trx("cycle_members").join("users", "users.id", "cycle_members.user_id")
           .where({ "cycle_members.cycle_id": cycle.id, "users.group_id": group_id })
           .orderBy("cycle_members.user_id").forShare().select("cycle_members.user_id");
+        if (input.user_ids) {
+          members = members.filter(member => input.user_ids.has(String(member.user_id)));
+          if (members.length !== input.user_ids.size) fail("Selected users must be enrolled in the current cycle of this group", 400);
+        }
         if (!members.length) fail("The current cycle has no enrolled members", 409);
         const cents = BigInt(input.amount.replace(".", "")) * BigInt(members.length);
         if (cents > 999999999999999999n) fail("Total contributions must fit numeric(18,2)");
